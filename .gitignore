@@ -1,0 +1,14 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.dylib
+*.out
+
+# Python & Runtime
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
