@@ -46,5 +46,6 @@ test: all
 
 clean:
 	rm -rf $(BUILD_DIR)
+	rm -f data/*.jsonl *.jsonl *.audit.jsonl
 
 .PHONY: all test clean
