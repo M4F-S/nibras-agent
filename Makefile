@@ -42,6 +42,10 @@ test: all
 	@echo " RUNNING NIBRAS ARABIC NORMALIZER & FADEMEM TEST SUITE"
 	@echo "=================================================================="
 	./$(TEST_BIN)
+	@echo "=================================================================="
+	@echo " RUNNING NIBRAS GOMAA 4-QUADRANT MEMORY OS TEST SUITE"
+	@echo "=================================================================="
+	python3 tests/test_nibras_gomaa.py
 	@echo "[SUCCESS] All Nibras Agent verification suites passed deterministically!"
 
 clean:
