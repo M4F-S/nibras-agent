@@ -11,14 +11,15 @@
 2. **Clear & Simple Language:** Always discuss problems, trade-offs, and architecture in **clear, simple, everyday English**. Never overwhelm the operator with dense academic jargon or robotic multiple-choice questions.
 3. **Research-First Protocol:** **NEVER guess, assume, or invent cognitive models or NLP architectures.** Always ask Mohamed for domain research or literature before making major design choices.
 4. **Engineering First (Strictly No Hype):** Focus 100% on **building, optimizing, and testing the software code**. Do NOT talk about pitch decks, demo videos, or peripheral marketing until the agent code is 100% complete and passing tests.
-5. **Tri-Mirror Synchronization:** The local folder, Google Drive mirror, and GitHub repo **must remain 100% identical mirrors at all times**. Whenever code or documentation is created or modified, run `./sync_mirror.sh` to update both Google Drive and GitHub immediately.
+5. **Do Not Reinvent the Wheel — Start Where Others Reached:** Never build from scratch what already exists. Leverage established libraries (`cJSON`, `libcurl`) and in-house battle-tested assets like **Gomaa (`https://github.com/M4F-S/gomaa`)** for its 4-quadrant cognitive memory architecture (Episodic, Semantic, Procedural, Working Memory), HippoRAG 2 associative retrieval, and Ebbinghaus decay, rather than inventing ad-hoc storage systems.
+6. **Tri-Mirror Synchronization:** The local folder, Google Drive mirror, and GitHub repo **must remain 100% identical mirrors at all times**. Whenever code or documentation is created or modified, run `./sync_mirror.sh` to update both Google Drive and GitHub immediately.
 
 ---
 
-### 2. UNDERLYING ENGINE FOUNDATION: ALMAZ
-- **Primary Foundation Engine:** **`Almaz` (`M4F-S/Almaz`)**
-  - Nibras is built directly on **Almaz's sovereign cognitive organism architecture**.
-  - *Why:* Personal executive assistance demands long-horizon conversational memory graphs with `FadeMem` exponential half-life decay, cognitive friction tracking, and zero cloud profiling under UAE PDPL Law No. 45 of 2021.
+### 2. UNDERLYING ENGINE FOUNDATION: ALMAZ + GOMAA
+- **Primary Foundation Engines:** **`Almaz` (`M4F-S/Almaz`)** and **`Gomaa` (`M4F-S/gomaa`)**
+  - Nibras combines **Almaz's sovereign cognitive organism architecture** with **Gomaa's production-grade 4-quadrant memory operating system**.
+  - *Why:* Personal executive assistance demands long-horizon conversational memory graphs with `FadeMem` / Ebbinghaus exponential half-life decay, associative retrieval via HippoRAG 2, cognitive friction tracking, and zero cloud profiling under UAE PDPL Law No. 45 of 2021.
 
 ---
 
