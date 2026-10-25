@@ -15,14 +15,35 @@ In personal cognitive management and executive daily operations across Dubai, in
 
 ---
 
-### 2. Build & Test Instructions
+### 2. Architecture & Components
+- **`src/nibras_agent.c`**: Standalone C99 CLI daemon and interactive REPL executive assistant.
+- **`adapters/nibras_arabic_fademem_adapter.c`**: Zero-allocation UTF-8 Arabic normalizer, deterministic entity/action extractor, and FadeMem exponential decay engine ($I(t') = I_0 \cdot 2^{-(t'-t)/\tau_{1/2}}$).
+- **`adapters/nibras_memory_store.c`**: Sovereign JSONL persistent memory store with pinned permanent nodes and full-text search.
+- **`adapters/grounding_shield.c`**: Deterministic fact-checking engine and PII redactor complying with UAE PDPL Law No. 45 of 2021.
+- **`tests/test_nibras_suite.c`**: 5-part end-to-end verification suite.
+
+---
+
+### 3. Build & CLI Usage
 ```bash
-# Build standalone test binaries and shared library
+# Build standalone daemon, shared library, and test suites
 make all
 
-# Run complete verification battery
+# Run complete deterministic verification suite
 make test
 
-# Clean build artifacts
-make clean
+# Run interactive CLI daemon
+./build/nibras_agent
+
+# Run realistic 7-day executive lifecycle demonstration
+./build/nibras_agent --demo
+
+# Ingest an Arabic task directly
+./build/nibras_agent --add "اجتماع مع رئيس هيئة الصحة بدبي غداً الساعة 10 صباحاً"
+
+# Advance time and prune decayed context (achieving >85% token reduction)
+./build/nibras_agent --decay 7d
+
+# Display Executive Cognitive HUD
+./build/nibras_agent --hud
 ```

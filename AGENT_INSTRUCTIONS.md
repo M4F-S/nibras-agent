@@ -32,10 +32,10 @@ Nibras is an air-gapped personal cognitive memory assistant and executive exocor
 
 ### 4. IMMEDIATE ENGINEERING ROADMAP
 When continuing development in this session, focus on these concrete coding tasks:
-- [ ] **Task 1: Standalone CLI Daemon (`src/nibras_agent.c`):** Create an interactive C99 daemon that ingests user notes/calendar tasks, normalizes Arabic text, and manages the local memory store.
-- [ ] **Task 2: Persistent FadeMem Memory Graph:** Implement a lightweight local memory store (JSONL or SQLite) where episodic memories decay over time while permanent nodes stay pinned.
-- [ ] **Task 3: Arabic Entity & Action Extractor:** Expand `adapters/nibras_arabic_fademem_adapter.c` with deterministic extraction for dates, appointments, and action items from Arabic text.
-- [ ] **Task 4: Build & Test Verification:** Run `make clean && make test` and ensure all suites pass with zero warnings.
+- [x] **Task 1: Standalone CLI Daemon (`src/nibras_agent.c`):** Create an interactive C99 daemon that ingests user notes/calendar tasks, normalizes Arabic text, and manages the local memory store.
+- [x] **Task 2: Persistent FadeMem Memory Graph:** Implement a lightweight local memory store (JSONL or SQLite) where episodic memories decay over time while permanent nodes stay pinned.
+- [x] **Task 3: Arabic Entity & Action Extractor:** Expand `adapters/nibras_arabic_fademem_adapter.c` with deterministic extraction for dates, appointments, and action items from Arabic text.
+- [x] **Task 4: Build & Test Verification:** Run `make clean && make test` and ensure all suites pass with zero warnings.
 
 ---
 

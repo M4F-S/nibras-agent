@@ -10,5 +10,9 @@ build/
 __pycache__/
 *.pyc
 
+# Data stores
+data/*.jsonl
+*.jsonl
+
 # OS
 .DS_Store
