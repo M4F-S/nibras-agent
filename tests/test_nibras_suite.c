@@ -356,6 +356,103 @@ static void test_utf8_truncation_regression(void) {
     printf("  [PASS] N-1 Arabic UTF-8 truncation regression suite verified.\n");
 }
 
+static void test_bm25_ranked_search(void) {
+    printf("[TEST Round-2] Running BM25 Ranked Retrieval & FadeMem Decay Pruning Test...\n");
+
+    const char *test_bm25_path = "build/test_bm25_store.jsonl";
+    unlink(test_bm25_path);
+
+    nibras_memory_store_t store;
+    int rc = nibras_store_init(&store, test_bm25_path);
+    assert(rc == 0);
+
+    /* Ingest 5 realistic executive notes:
+     * 1. Note 1: Pinned executive decision containing both "DIFC" and "ترخيص" (target top-rank)
+     * 2. Note 2: Consolidated action item containing only "ترخيص" (partial match)
+     * 3. Note 3: Ephemeral chatter containing "DIFC" (will be pruned by decay)
+     * 4. Note 4: Unrelated appointment with health authority
+     * 5. Note 5: Routine English server ping
+     */
+    uint64_t id1 = nibras_store_ingest(&store, "قرار مجلس الإدارة: اعتماد ترخيص DIFC الجديد وتفويض الإدارة التنفيذية", 180, NULL);
+    uint64_t id2 = nibras_store_ingest(&store, "موافقة على سداد رسوم ترخيص المكاتب والشركات في دبي", 120, NULL);
+    uint64_t id3 = nibras_store_ingest(&store, "جلسة قهوة سريعة في DIFC مع فريق العمل لمناقشة عطلة الأسبوع", 90, NULL);
+    uint64_t id4 = nibras_store_ingest(&store, "اجتماع مع هيئة الصحة بدبي غداً الساعة 10 صباحاً لمراجعة اللائحة", 140, NULL);
+    uint64_t id5 = nibras_store_ingest(&store, "Routine CI build status check and daily server uptime ping", 60, NULL);
+
+    assert(id1 == 1 && id2 == 2 && id3 == 3 && id4 == 4 && id5 == 5);
+    assert(store.count == 5);
+
+    /* Verify Note 1 is pinned */
+    nibras_memory_node_t *n1 = nibras_store_find_by_id(&store, id1);
+    assert(n1 != NULL && n1->is_pinned == true);
+
+    /* Verify Note 3 is unpinned ephemeral chatter with low salience */
+    nibras_memory_node_t *n3 = nibras_store_find_by_id(&store, id3);
+    assert(n3 != NULL && n3->is_pinned == false);
+    assert(n3->initial_intensity <= 0.65);
+
+    /* Pre-decay search: 2-word mixed Arabic/English query */
+    const char *query = "DIFC ترخيص";
+    nibras_search_result_t results[8];
+    size_t num = nibras_store_search_ranked(&store, query, results, 8);
+
+    assert(num >= 2);
+    /* Note 1 matches both terms and must rank first */
+    assert(results[0].node.id == id1);
+    assert(results[0].score > 0.0);
+    assert(strstr(results[0].match_reason, "difc") != NULL);
+    assert(strstr(results[0].match_reason, "ترخيص") != NULL);
+
+    /* Step FadeMem decay 7 days forward:
+     * Note 3 decays below 0.25 and becomes TRAJ_NOISE_PRUNED.
+     * Note 1 remains TRAJ_DISTILLED_RULE at intensity 1.0.
+     */
+    uint64_t future_now = (uint64_t)time(NULL) + (7 * 86400ULL);
+    nibras_telemetry_snapshot_t snap;
+    nibras_store_step_decay(&store, future_now, 86400.0, 1.0, 3 * 86400.0, &snap);
+
+    /* Verify Note 3 is now pruned */
+    n3 = nibras_store_find_by_id(&store, id3);
+    assert(n3 != NULL);
+    assert(n3->state == TRAJ_NOISE_PRUNED);
+
+    /* Post-decay BM25 ranked search:
+     * Assert the right note (Note 1) ranks first and the pruned one (Note 3) is ABSENT.
+     */
+    size_t post_num = nibras_store_search_ranked(&store, query, results, 8);
+    assert(post_num == 2);
+    assert(results[0].node.id == id1);
+    assert(results[1].node.id == id2);
+    assert(results[0].score > results[1].score);
+
+    /* Confirm pruned note 3 is completely absent */
+    for (size_t i = 0; i < post_num; ++i) {
+        assert(results[i].node.id != id3);
+        assert(results[i].node.state != TRAJ_NOISE_PRUNED);
+    }
+
+    /* Test UTF-8 safety with punctuation and spaces */
+    nibras_search_result_t safe_results[8];
+    size_t safe_num = nibras_store_search_ranked(&store, "  DIFC,   ترخيص!  ", safe_results, 8);
+    assert(safe_num == post_num);
+    assert(safe_results[0].node.id == id1);
+
+    /* Test backward-compatible nibras_store_search */
+    nibras_memory_node_t legacy_matches[8];
+    size_t legacy_num = nibras_store_search(&store, query, legacy_matches, 8);
+    assert(legacy_num == 2);
+    assert(legacy_matches[0].id == id1);
+    assert(legacy_matches[1].id == id2);
+
+    printf("  [PASS] Top result: #%llu \"%s\" (BM25: %.2f)\n",
+           (unsigned long long)results[0].node.id, results[0].node.summary, results[0].score);
+    printf("  [PASS] Reason: %s\n", results[0].match_reason);
+    printf("  [PASS] Pruned node #3 verified absent from ranked results.\n");
+
+    unlink(test_bm25_path);
+    printf("  [PASS] BM25 Ranked Retrieval test passed deterministically.\n");
+}
+
 int main(void) {
     printf("==================================================================\n");
     printf(" NIBRAS (نبراس): COMPREHENSIVE SYSTEM VERIFICATION SUITE\n");
@@ -366,10 +463,11 @@ int main(void) {
     test_fademem_decay_and_pruning();
     test_jsonl_memory_store();
     test_utf8_truncation_regression();
+    test_bm25_ranked_search();
     test_sovereign_privacy_and_grounding();
 
     printf("==================================================================\n");
-    printf(" [SUCCESS] All 6 Nibras verification suites passed deterministically!\n");
+    printf(" [SUCCESS] All 7 Nibras verification suites passed deterministically!\n");
     printf("==================================================================\n");
     return 0;
 }

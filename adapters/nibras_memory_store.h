@@ -15,9 +15,29 @@ extern "C" {
 #endif
 
 #define NIBRAS_MAX_MEMORY_NODES 1024
+#define NIBRAS_MAX_DOC_TOKENS   32
+#define NIBRAS_MAX_TOKEN_LEN    48
+
+typedef struct {
+    char     term[NIBRAS_MAX_TOKEN_LEN];
+    uint16_t freq;
+} nibras_doc_term_t;
+
+typedef struct {
+    nibras_doc_term_t terms[NIBRAS_MAX_DOC_TOKENS];
+    uint16_t          term_count;  /* Number of unique terms in doc */
+    uint16_t          total_words; /* Total word count in doc (|D|) */
+} nibras_doc_index_t;
+
+typedef struct {
+    nibras_memory_node_t node;
+    double               score;              /* BM25 relevance score */
+    char                 match_reason[160];  /* Human-readable match breakdown */
+} nibras_search_result_t;
 
 typedef struct {
     nibras_memory_node_t nodes[NIBRAS_MAX_MEMORY_NODES];
+    nibras_doc_index_t   index[NIBRAS_MAX_MEMORY_NODES];
     size_t               count;
     char                 filepath[256];
     uint64_t             next_id;
@@ -62,7 +82,18 @@ int nibras_store_save(const nibras_memory_store_t *store, const char *filepath);
 /* Load memory store from JSONL */
 int nibras_store_load(nibras_memory_store_t *store, const char *filepath);
 
-/* Search memory store by text (case-insensitive substring match in summary or raw_arabic) */
+/* Build or rebuild BM25 document index across all loaded nodes */
+void nibras_store_build_index(nibras_memory_store_t *store);
+
+/* BM25 Ranked search returning top-k results with scores and match reasons (scored after decay) */
+size_t nibras_store_search_ranked(
+    const nibras_memory_store_t *store,
+    const char                  *query,
+    nibras_search_result_t      *out_results,
+    size_t                       max_results
+);
+
+/* Search memory store by text with deterministic BM25 ranking (backward-compatible top-k nodes) */
 size_t nibras_store_search(
     const nibras_memory_store_t *store,
     const char                  *query,

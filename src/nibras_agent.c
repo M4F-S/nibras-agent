@@ -170,6 +170,41 @@ static void handle_decay(nibras_memory_store_t *store, const char *duration_str)
     printf("  Cognitive Friction Index: %.3f\n\n", snap.cognitive_friction_index);
 }
 
+static void handle_search(const nibras_memory_store_t *store, const char *query) {
+    if (!query || query[0] == '\0') {
+        printf("[WARN] Empty search query.\n");
+        return;
+    }
+
+    nibras_search_result_t results[16];
+    size_t num = nibras_store_search_ranked(store, query, results, 16);
+
+    printf("\n── BM25 Ranked Retrieval for \"%s\" (%zu match%s) ──────────────────────────\n",
+           query, num, num == 1 ? "" : "es");
+    if (num == 0) {
+        printf("  No relevant active memory nodes found (decayed noise pruned).\n");
+    } else {
+        printf("%-4s | %-6s | %-11s | %-16s | %-8s | %s\n",
+               "RANK", "BM25", "STATE", "INTENSITY", "CATEGORY", "SUMMARY");
+        printf("─────┼────────┼─────────────┼──────────────────┼──────────┼─────────────────────\n");
+        for (size_t i = 0; i < num; ++i) {
+            char bar[32];
+            render_intensity_bar(results[i].node.current_intensity, bar, sizeof(bar));
+            printf("#%-3zu | %-6.2f | %-11s | %-16s | %-8s | %s\n",
+                   i + 1,
+                   results[i].score,
+                   get_state_str(results[i].node.state, results[i].node.is_pinned),
+                   bar,
+                   results[i].node.category,
+                   results[i].node.summary);
+            if (results[i].match_reason[0] != '\0') {
+                printf("     └─ Reason: %s\n", results[i].match_reason);
+            }
+        }
+    }
+    printf("─────────────────────────────────────────────────────────────────────────────\n\n");
+}
+
 static void run_demo(nibras_memory_store_t *store) {
     printf("\n==================================================================\n");
     printf(" NIBRAS (نبراس): END-TO-END AUTONOMOUS COGNITIVE LIFECYCLE DEMO\n");
@@ -198,14 +233,20 @@ static void run_demo(nibras_memory_store_t *store) {
     print_hud(store);
     list_memories(store, NULL);
 
+    printf("Pre-Decay BM25 Ranked Query: \"DIFC ترخيص\"\n");
+    handle_search(store, "DIFC ترخيص");
+
     printf("\nStep 2: Simulating 7 Days of Executive Operational Time...\n");
     printf("Applying FadeMem Half-Life Decay Formula: I(t') = I_0 * 2^(-dt / tau_1/2)\n");
     printf("Tau_1/2 = 24.0 hours, Consolidation Window = 3 days\n");
 
     handle_decay(store, "7d");
 
-    printf("\nStep 3: Post-Decay Memory Graph Audit:\n");
+    printf("\nStep 3: Post-Decay Memory Graph Audit & Ranked Recall:\n");
     list_memories(store, NULL);
+
+    printf("Post-Decay BM25 Ranked Query: \"DIFC ترخيص\" (Scored after FadeMem decay)\n");
+    handle_search(store, "DIFC ترخيص");
 
     print_hud(store);
 
@@ -214,6 +255,7 @@ static void run_demo(nibras_memory_store_t *store) {
     printf(" - Ephemeral chatter successfully pruned below I < 0.25 threshold.\n");
     printf(" - Executive decisions & statutory rules consolidated and pinned at 1.0.\n");
     printf(" - Token reduction verified above statutory target (>85%%).\n");
+    printf(" - Deterministic BM25 ranked retrieval verified with match reasons.\n");
     printf(" - 100%% Sovereign On-Device Execution (Zero Cloud Data Leakage).\n");
     printf("==================================================================\n\n");
 }
@@ -302,12 +344,7 @@ static void run_repl(nibras_memory_store_t *store) {
             } else if (strncmp(line, ":search", 7) == 0) {
                 const char *q = line + 7;
                 while (*q == ' ') q++;
-                nibras_memory_node_t matches[16];
-                size_t num = nibras_store_search(store, q, matches, 16);
-                printf("Found %zu matches for \"%s\":\n", num, q);
-                for (size_t i = 0; i < num; ++i) {
-                    printf("  #%-3llu [%s] %s\n", (unsigned long long)matches[i].id, matches[i].category, matches[i].summary);
-                }
+                handle_search(store, q);
             } else if (strcmp(line, ":demo") == 0) {
                 run_demo(store);
             } else {
@@ -365,13 +402,7 @@ int main(int argc, char *argv[]) {
             const char *filter = ((i + 1) < argc && argv[i + 1][0] != '-') ? argv[++i] : NULL;
             list_memories(&store, filter);
         } else if (strcmp(argv[i], "--search") == 0 && (i + 1) < argc) {
-            const char *q = argv[++i];
-            nibras_memory_node_t matches[16];
-            size_t num = nibras_store_search(&store, q, matches, 16);
-            printf("Found %zu matches for \"%s\":\n", num, q);
-            for (size_t k = 0; k < num; ++k) {
-                printf("  #%-3llu [%s] %s\n", (unsigned long long)matches[k].id, matches[k].category, matches[k].summary);
-            }
+            handle_search(&store, argv[++i]);
         } else if (strcmp(argv[i], "--status") == 0 || strcmp(argv[i], "--hud") == 0) {
             print_banner();
             print_hud(&store);

@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <time.h>
+#include <math.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
@@ -162,25 +163,163 @@ static void ensure_parent_dir(const char *filepath) {
     mkdir(tmp, 0755);
 }
 
-/* Case-insensitive substring match */
-static bool strcasestr_match(const char *haystack, const char *needle) {
-    if (!haystack || !needle) return false;
-    if (needle[0] == '\0') return true;
+/* Character delimiter check for BM25 tokenization */
+static bool is_token_delim(unsigned char c) {
+    if (c <= ' ') return true;
+    if (c >= 0x80) return false; /* UTF-8 lead or continuation byte */
+    switch (c) {
+        case ',': case '.': case ';': case ':': case '!': case '?':
+        case '-': case '_': case '(': case ')': case '[': case ']':
+        case '{': case '}': case '"': case '\'': case '/': case '\\':
+        case '|': case '#': case '@': case '+': case '=': case '*':
+        case '&': case '%': case '^': case '~': case '`': case '<': case '>':
+            return true;
+        default:
+            return false;
+    }
+}
 
-    size_t needle_len = strlen(needle);
-    for (; *haystack != '\0'; ++haystack) {
-        if (tolower((unsigned char)*haystack) == tolower((unsigned char)*needle)) {
-            size_t i = 1;
-            for (; i < needle_len; ++i) {
-                if (haystack[i] == '\0' ||
-                    tolower((unsigned char)haystack[i]) != tolower((unsigned char)needle[i])) {
-                    break;
-                }
-            }
-            if (i == needle_len) return true;
+/* Light stemming for Arabic definite article "الـ" */
+static void light_stem_arabic(char *token, size_t *inout_len) {
+    if (!token || !inout_len || *inout_len < 8) return;
+    unsigned char *u = (unsigned char *)token;
+    /* Check for "ال" prefix (0xD8 0xA7 0xD9 0x84) */
+    if (u[0] == 0xD8 && u[1] == 0xA7 && u[2] == 0xD9 && u[3] == 0x84) {
+        size_t rem = *inout_len - 4;
+        memmove(token, token + 4, rem);
+        token[rem] = '\0';
+        *inout_len = rem;
+    }
+}
+
+/* Helper to insert a token into unique tokens list */
+static void add_unique_token(
+    const char *tok,
+    char        out_tokens[NIBRAS_MAX_DOC_TOKENS][NIBRAS_MAX_TOKEN_LEN],
+    uint16_t    out_freqs[NIBRAS_MAX_DOC_TOKENS],
+    size_t     *inout_unique_count
+) {
+    if (!tok || tok[0] == '\0' || !inout_unique_count) return;
+    for (size_t i = 0; i < *inout_unique_count; ++i) {
+        if (strcmp(out_tokens[i], tok) == 0) {
+            if (out_freqs) out_freqs[i]++;
+            return;
         }
     }
-    return false;
+    if (*inout_unique_count < NIBRAS_MAX_DOC_TOKENS) {
+        nib_strlcpy(out_tokens[*inout_unique_count], tok, NIBRAS_MAX_TOKEN_LEN);
+        if (out_freqs) out_freqs[*inout_unique_count] = 1;
+        (*inout_unique_count)++;
+    }
+}
+
+/* Tokenize text into normalized tokens with frequencies and total word count */
+static size_t nibras_tokenize_text(
+    const char *src,
+    char        out_tokens[NIBRAS_MAX_DOC_TOKENS][NIBRAS_MAX_TOKEN_LEN],
+    uint16_t    out_freqs[NIBRAS_MAX_DOC_TOKENS],
+    uint16_t   *out_total_words
+) {
+    if (!src || !out_tokens) return 0;
+
+    /* Normalize with UTF-8 safety */
+    char safe_src[512];
+    size_t safe_src_len = nib_utf8_prefix(src, sizeof(safe_src) - 1);
+    memcpy(safe_src, src, safe_src_len);
+    safe_src[safe_src_len] = '\0';
+
+    char norm_buf[512];
+    arabic_normalize_utf8_hardened(safe_src, norm_buf, sizeof(norm_buf));
+
+    size_t unique_count = 0;
+    uint16_t total_words = 0;
+    const unsigned char *p = (const unsigned char *)norm_buf;
+
+    while (*p != '\0') {
+        while (*p != '\0' && is_token_delim(*p)) {
+            p++;
+        }
+        if (*p == '\0') break;
+
+        char token[NIBRAS_MAX_TOKEN_LEN];
+        size_t t_idx = 0;
+
+        while (*p != '\0' && !is_token_delim(*p)) {
+            if (*p < 0x80) {
+                if (t_idx + 1 < NIBRAS_MAX_TOKEN_LEN) {
+                    token[t_idx++] = (char)tolower(*p);
+                }
+                p++;
+            } else {
+                size_t cp_len = 1;
+                if ((*p & 0xE0) == 0xC0) cp_len = 2;
+                else if ((*p & 0xF0) == 0xE0) cp_len = 3;
+                else if ((*p & 0xF8) == 0xF0) cp_len = 4;
+
+                if (t_idx + cp_len < NIBRAS_MAX_TOKEN_LEN) {
+                    for (size_t k = 0; k < cp_len && p[k] != '\0'; ++k) {
+                        token[t_idx++] = (char)p[k];
+                    }
+                }
+                p += cp_len;
+            }
+        }
+
+        size_t safe_len = nib_utf8_prefix(token, t_idx);
+        token[safe_len] = '\0';
+
+        if (safe_len > 0) {
+            total_words++;
+            add_unique_token(token, out_tokens, out_freqs, &unique_count);
+
+            /* Also index light-stemmed form if different (e.g. "الترخيص" -> "ترخيص") */
+            char stemmed[NIBRAS_MAX_TOKEN_LEN];
+            nib_strlcpy(stemmed, token, sizeof(stemmed));
+            size_t stem_len = safe_len;
+            light_stem_arabic(stemmed, &stem_len);
+            if (stem_len != safe_len && stem_len > 0) {
+                add_unique_token(stemmed, out_tokens, out_freqs, &unique_count);
+            }
+        }
+    }
+
+    if (out_total_words) {
+        *out_total_words = total_words;
+    }
+    return unique_count;
+}
+
+/* Index a single document into the in-memory index */
+static void nibras_store_index_node_internal(nibras_memory_store_t *store, size_t doc_idx) {
+    if (!store || doc_idx >= store->count) return;
+
+    const nibras_memory_node_t *node = &store->nodes[doc_idx];
+    nibras_doc_index_t *doc_idx_ptr = &store->index[doc_idx];
+    memset(doc_idx_ptr, 0, sizeof(*doc_idx_ptr));
+
+    char full_text[512];
+    snprintf(full_text, sizeof(full_text), "%s %s %s", node->summary, node->raw_arabic, node->category);
+
+    char temp_tokens[NIBRAS_MAX_DOC_TOKENS][NIBRAS_MAX_TOKEN_LEN];
+    uint16_t temp_freqs[NIBRAS_MAX_DOC_TOKENS];
+    uint16_t total_w = 0;
+
+    size_t u_cnt = nibras_tokenize_text(full_text, temp_tokens, temp_freqs, &total_w);
+
+    doc_idx_ptr->term_count = (uint16_t)u_cnt;
+    doc_idx_ptr->total_words = total_w > 0 ? total_w : 1;
+
+    for (size_t i = 0; i < u_cnt; ++i) {
+        nib_strlcpy(doc_idx_ptr->terms[i].term, temp_tokens[i], NIBRAS_MAX_TOKEN_LEN);
+        doc_idx_ptr->terms[i].freq = temp_freqs[i];
+    }
+}
+
+void nibras_store_build_index(nibras_memory_store_t *store) {
+    if (!store) return;
+    for (size_t i = 0; i < store->count; ++i) {
+        nibras_store_index_node_internal(store, i);
+    }
 }
 
 int nibras_store_init(nibras_memory_store_t *store, const char *filepath) {
@@ -219,6 +358,7 @@ uint64_t nibras_store_add_node(nibras_memory_store_t *store, const nibras_memory
     }
 
     store->count++;
+    nibras_store_index_node_internal(store, store->count - 1);
 
     if (store->filepath[0] != '\0') {
         nibras_store_save(store, store->filepath);
@@ -511,7 +651,169 @@ int nibras_store_load(nibras_memory_store_t *store, const char *filepath) {
     }
 
     fclose(f);
+    nibras_store_build_index(store);
     return 0;
+}
+
+typedef struct {
+    size_t doc_idx;
+    double score;
+    char   match_reason[160];
+} nibras_bm25_candidate_t;
+
+size_t nibras_store_search_ranked(
+    const nibras_memory_store_t *store,
+    const char                  *query,
+    nibras_search_result_t      *out_results,
+    size_t                       max_results
+) {
+    if (!store || !query || !out_results || max_results == 0 || store->count == 0) {
+        return 0;
+    }
+
+    /* Tokenize query with UTF-8 prefix safety */
+    char q_tokens[NIBRAS_MAX_DOC_TOKENS][NIBRAS_MAX_TOKEN_LEN];
+    uint16_t q_freqs[NIBRAS_MAX_DOC_TOKENS];
+    uint16_t q_total_words = 0;
+    size_t q_term_count = nibras_tokenize_text(query, q_tokens, q_freqs, &q_total_words);
+
+    if (q_term_count == 0) return 0;
+
+    /* Compute collection statistics among active (non-pruned) documents */
+    size_t N_active = 0;
+    double total_len = 0.0;
+
+    for (size_t i = 0; i < store->count; ++i) {
+        if (store->nodes[i].state != TRAJ_NOISE_PRUNED) {
+            N_active++;
+            total_len += (double)store->index[i].total_words;
+        }
+    }
+
+    if (N_active == 0) return 0;
+    double avgdl = total_len / (double)N_active;
+    if (avgdl < 1.0) avgdl = 1.0;
+
+    /* Compute IDF for each query term across active collection */
+    double q_idf[NIBRAS_MAX_DOC_TOKENS];
+    size_t q_df[NIBRAS_MAX_DOC_TOKENS];
+
+    for (size_t j = 0; j < q_term_count; ++j) {
+        size_t df = 0;
+        for (size_t i = 0; i < store->count; ++i) {
+            if (store->nodes[i].state == TRAJ_NOISE_PRUNED) continue;
+
+            const nibras_doc_index_t *didx = &store->index[i];
+            for (size_t t = 0; t < didx->term_count; ++t) {
+                if (strcmp(didx->terms[t].term, q_tokens[j]) == 0) {
+                    df++;
+                    break;
+                }
+            }
+        }
+        q_df[j] = df;
+        if (df > 0) {
+            /* Standard non-negative BM25 IDF: ln((N - df + 0.5)/(df + 0.5) + 1.0) */
+            q_idf[j] = log(((double)(N_active - df) + 0.5) / ((double)df + 0.5) + 1.0);
+            if (q_idf[j] < 0.0) q_idf[j] = 0.0;
+        } else {
+            q_idf[j] = 0.0;
+        }
+    }
+
+    /* Score active documents using BM25 */
+    const double k1 = 1.2;
+    const double b = 0.75;
+
+    nibras_bm25_candidate_t candidates[NIBRAS_MAX_MEMORY_NODES];
+    size_t candidate_count = 0;
+
+    for (size_t i = 0; i < store->count; ++i) {
+        /* Filter out decayed / noise-pruned nodes — rank strictly after decay */
+        if (store->nodes[i].state == TRAJ_NOISE_PRUNED) continue;
+
+        const nibras_doc_index_t *didx = &store->index[i];
+        double doc_len = (double)didx->total_words;
+        double doc_score = 0.0;
+        char reason_buf[160] = {0};
+        size_t reason_w = 0;
+        size_t match_terms = 0;
+
+        for (size_t j = 0; j < q_term_count; ++j) {
+            if (q_df[j] == 0) continue;
+
+            uint16_t tf = 0;
+            for (size_t t = 0; t < didx->term_count; ++t) {
+                if (strcmp(didx->terms[t].term, q_tokens[j]) == 0) {
+                    tf = didx->terms[t].freq;
+                    break;
+                }
+            }
+
+            if (tf > 0) {
+                double tf_comp = ((double)tf * (k1 + 1.0)) /
+                                 ((double)tf + k1 * (1.0 - b + b * (doc_len / avgdl)));
+                double term_score = q_idf[j] * tf_comp;
+                doc_score += term_score;
+                match_terms++;
+
+                int n = snprintf(reason_buf + reason_w, sizeof(reason_buf) - reason_w,
+                                 "%s'%s' (tf=%u, idf=%.2f)",
+                                 (match_terms > 1 ? ", " : "matched: "),
+                                 q_tokens[j], (unsigned int)tf, q_idf[j]);
+                if (n > 0 && (size_t)n < sizeof(reason_buf) - reason_w) {
+                    reason_w += (size_t)n;
+                }
+            }
+        }
+
+        if (doc_score > 0.0) {
+            candidates[candidate_count].doc_idx = i;
+            candidates[candidate_count].score = doc_score;
+            nib_strlcpy(candidates[candidate_count].match_reason, reason_buf, sizeof(candidates[candidate_count].match_reason));
+            candidate_count++;
+        }
+    }
+
+    if (candidate_count == 0) return 0;
+
+    /* Deterministic sorting descending by BM25 score with stable tie-breaks */
+    for (size_t i = 0; i < candidate_count - 1; ++i) {
+        for (size_t j = i + 1; j < candidate_count; ++j) {
+            bool swap = false;
+            if (candidates[j].score > candidates[i].score + 1e-6) {
+                swap = true;
+            } else if (fabs(candidates[j].score - candidates[i].score) <= 1e-6) {
+                size_t idx_i = candidates[i].doc_idx;
+                size_t idx_j = candidates[j].doc_idx;
+                if (store->nodes[idx_j].is_pinned && !store->nodes[idx_i].is_pinned) {
+                    swap = true;
+                } else if (store->nodes[idx_j].current_intensity > store->nodes[idx_i].current_intensity + 1e-6) {
+                    swap = true;
+                } else if (store->nodes[idx_j].created_utc > store->nodes[idx_i].created_utc) {
+                    swap = true;
+                } else if (store->nodes[idx_j].id < store->nodes[idx_i].id) {
+                    swap = true;
+                }
+            }
+            if (swap) {
+                nibras_bm25_candidate_t tmp = candidates[i];
+                candidates[i] = candidates[j];
+                candidates[j] = tmp;
+            }
+        }
+    }
+
+    /* Populate top-k output results */
+    size_t return_count = candidate_count < max_results ? candidate_count : max_results;
+    for (size_t k = 0; k < return_count; ++k) {
+        size_t d_idx = candidates[k].doc_idx;
+        out_results[k].node = store->nodes[d_idx];
+        out_results[k].score = candidates[k].score;
+        nib_strlcpy(out_results[k].match_reason, candidates[k].match_reason, sizeof(out_results[k].match_reason));
+    }
+
+    return return_count;
 }
 
 size_t nibras_store_search(
@@ -522,19 +824,10 @@ size_t nibras_store_search(
 ) {
     if (!store || !query || !out_matches || max_matches == 0) return 0;
 
-    char norm_query[256];
-    arabic_normalize_utf8_hardened(query, norm_query, sizeof(norm_query));
-
-    size_t matches = 0;
-    for (size_t i = 0; i < store->count && matches < max_matches; ++i) {
-        const nibras_memory_node_t *n = &store->nodes[i];
-        if (strcasestr_match(n->summary, query) ||
-            strcasestr_match(n->summary, norm_query) ||
-            strcasestr_match(n->raw_arabic, query) ||
-            strcasestr_match(n->raw_arabic, norm_query) ||
-            strcasestr_match(n->category, query)) {
-            out_matches[matches++] = *n;
-        }
+    nibras_search_result_t results[NIBRAS_MAX_MEMORY_NODES];
+    size_t count = nibras_store_search_ranked(store, query, results, max_matches);
+    for (size_t i = 0; i < count; ++i) {
+        out_matches[i] = results[i].node;
     }
-    return matches;
+    return count;
 }
