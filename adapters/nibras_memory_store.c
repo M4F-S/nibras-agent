@@ -115,12 +115,44 @@ static bool parse_json_value(const char *json, const char *key, char *out_val, s
     return (i > 0);
 }
 
+/* Helper to ensure NUL-terminated copy */
+static void nib_strlcpy(char *dst, const char *src, size_t cap) {
+    if (!dst || cap == 0) return;
+    size_t n = src ? strlen(src) : 0;
+    if (n >= cap) n = cap - 1;
+    if (n) memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
+/* longest prefix of s, at most cap bytes, that does not split a UTF-8 sequence */
+static size_t nib_utf8_prefix(const char *s, size_t cap) {
+    if (!s || cap == 0) return 0;
+    size_t n = 0;
+    while (n < cap && s[n] != '\0') n++;
+    while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+    return n;
+}
+
+/* "title (datetime)" into dst, truncating on codepoint boundaries */
+static void nib_summary(char *dst, size_t cap, const char *title, const char *dt) {
+    if (!dst || cap == 0) return;
+    size_t tl = nib_utf8_prefix(title ? title : "", cap > 4 ? 64 : 0);
+    size_t dl = nib_utf8_prefix(dt ? dt : "", 48);
+    if (dl && tl + 3 + dl >= cap) dl = nib_utf8_prefix(dt ? dt : "", (tl + 3 < cap) ? cap - tl - 4 : 0);
+    size_t w = 0;
+    if (tl) { memcpy(dst, title, tl); w = tl; }
+    if (dl && w + 3 < cap) {
+        memcpy(dst + w, " (", 2); w += 2;
+        memcpy(dst + w, dt, dl); w += dl; dst[w++] = ')';
+    }
+    dst[w] = '\0';
+}
+
 /* Helper to ensure parent directory exists */
 static void ensure_parent_dir(const char *filepath) {
     if (!filepath) return;
     char tmp[256];
-    strncpy(tmp, filepath, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
+    nib_strlcpy(tmp, filepath, sizeof(tmp));
 
     char *last_slash = strrchr(tmp, '/');
     if (!last_slash) return;
@@ -157,8 +189,7 @@ int nibras_store_init(nibras_memory_store_t *store, const char *filepath) {
     store->next_id = 1;
 
     if (filepath && filepath[0] != '\0') {
-        strncpy(store->filepath, filepath, sizeof(store->filepath) - 1);
-        store->filepath[sizeof(store->filepath) - 1] = '\0';
+        nib_strlcpy(store->filepath, filepath, sizeof(store->filepath));
         ensure_parent_dir(filepath);
         nibras_store_load(store, filepath);
     }
@@ -235,35 +266,36 @@ uint64_t nibras_store_ingest(
 
     /* Assign category */
     if (info.is_appointment) {
-        strncpy(node.category, "appointment", sizeof(node.category) - 1);
+        nib_strlcpy(node.category, "appointment", sizeof(node.category));
     } else if (info.is_executive_decision) {
-        strncpy(node.category, "decision", sizeof(node.category) - 1);
+        nib_strlcpy(node.category, "decision", sizeof(node.category));
     } else if (info.is_action_item) {
-        strncpy(node.category, "action", sizeof(node.category) - 1);
+        nib_strlcpy(node.category, "action", sizeof(node.category));
     } else if (info.datetime_str[0] != '\0') {
-        strncpy(node.category, "calendar", sizeof(node.category) - 1);
+        nib_strlcpy(node.category, "calendar", sizeof(node.category));
     } else {
-        strncpy(node.category, "chatter", sizeof(node.category) - 1);
+        nib_strlcpy(node.category, "chatter", sizeof(node.category));
     }
 
-    /* Generate structured summary */
+    /* Generate structured summary without mid-codepoint UTF-8 slicing */
     if (info.is_appointment && info.datetime_str[0] != '\0') {
-        snprintf(node.summary, sizeof(node.summary), "%s (%s)", info.appointment_title, info.datetime_str);
+        nib_summary(node.summary, sizeof(node.summary), info.appointment_title, info.datetime_str);
     } else if (info.is_appointment) {
-        snprintf(node.summary, sizeof(node.summary), "%s", info.appointment_title);
+        nib_summary(node.summary, sizeof(node.summary), info.appointment_title, NULL);
     } else if (info.is_executive_decision) {
-        strncpy(node.summary, norm_text, sizeof(node.summary) - 1);
+        nib_summary(node.summary, sizeof(node.summary), norm_text, NULL);
     } else if (info.is_action_item && info.datetime_str[0] != '\0') {
-        snprintf(node.summary, sizeof(node.summary), "%s (%s)", info.action_verb, info.datetime_str);
+        nib_summary(node.summary, sizeof(node.summary), info.action_verb, info.datetime_str);
     } else if (info.is_action_item) {
-        snprintf(node.summary, sizeof(node.summary), "%s", info.action_verb);
+        nib_summary(node.summary, sizeof(node.summary), info.action_verb, NULL);
     } else {
-        strncpy(node.summary, norm_text, sizeof(node.summary) - 1);
+        nib_summary(node.summary, sizeof(node.summary), norm_text, NULL);
     }
-    node.summary[sizeof(node.summary) - 1] = '\0';
 
-    strncpy(node.raw_arabic, raw_text, sizeof(node.raw_arabic) - 1);
-    node.raw_arabic[sizeof(node.raw_arabic) - 1] = '\0';
+    /* Safe UTF-8 copy for raw text */
+    size_t raw_len = nib_utf8_prefix(raw_text, sizeof(node.raw_arabic) - 1);
+    if (raw_len) memcpy(node.raw_arabic, raw_text, raw_len);
+    node.raw_arabic[raw_len] = '\0';
 
     return nibras_store_add_node(store, &node);
 }

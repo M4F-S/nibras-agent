@@ -13,6 +13,8 @@ __pycache__/
 # Data stores
 data/*.jsonl
 *.jsonl
+*.audit.jsonl
+*.db
 
 # OS
 .DS_Store

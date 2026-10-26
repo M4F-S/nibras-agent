@@ -280,6 +280,82 @@ static void test_sovereign_privacy_and_grounding(void) {
     printf("  [PASS] UAE PDPL Privacy & Grounding Shield verified.\n");
 }
 
+static bool validate_utf8(const char *s) {
+    if (!s) return false;
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p != '\0') {
+        if (*p <= 0x7F) {
+            p++;
+        } else if ((*p & 0xE0) == 0xC0) {
+            if (*p < 0xC2) return false; /* Overlong encoding */
+            if ((p[1] & 0xC0) != 0x80) return false;
+            p += 2;
+        } else if ((*p & 0xF0) == 0xE0) {
+            if (*p == 0xE0 && p[1] < 0xA0) return false; /* Overlong */
+            if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80) return false;
+            p += 3;
+        } else if ((*p & 0xF8) == 0xF0) {
+            if (*p == 0xF0 && p[1] < 0x90) return false; /* Overlong */
+            if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80 || (p[3] & 0xC0) != 0x80) return false;
+            p += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void test_utf8_truncation_regression(void) {
+    printf("[TEST N-1] Running UTF-8 Truncation & String Boundary Regression Test...\n");
+
+    const char *reg_store_path = "build/test_utf8_regression.jsonl";
+    unlink(reg_store_path);
+
+    nibras_memory_store_t store;
+    int rc = nibras_store_init(&store, reg_store_path);
+    assert(rc == 0);
+
+    /* 40+ character mixed Arabic/English appointment with trailing Arabic text and datetime */
+    const char *mixed_title = "اجتماع Joint AI Governance Committee 2026 في دبي غداً الساعة 10 صباحاً";
+    uint64_t id = nibras_store_ingest(&store, mixed_title, 0, NULL);
+    assert(id > 0);
+
+    /* 1. Inspect raw JSONL file directly to verify strict UTF-8 validity */
+    FILE *f = fopen(reg_store_path, "r");
+    assert(f != NULL);
+    char line[2048];
+    while (fgets(line, sizeof(line), f)) {
+        assert(validate_utf8(line) == true);
+        /* Ensure no dangling lead bytes 0xD8/0xD9/0xDB right before quote or bracket */
+        size_t len = strlen(line);
+        for (size_t i = 0; i < len; ++i) {
+            unsigned char b = (unsigned char)line[i];
+            if (b >= 0xC0 && (i + 1 == len || (line[i + 1] & 0xC0) != 0x80)) {
+                assert(false && "Split UTF-8 lead byte detected in JSONL output!");
+            }
+        }
+    }
+    fclose(f);
+
+    /* 2. Reload into fresh store instance and assert decoded properties */
+    nibras_memory_store_t reload_store;
+    rc = nibras_store_init(&reload_store, reg_store_path);
+    assert(rc == 0);
+    assert(reload_store.count == 1);
+
+    nibras_memory_node_t *node = nibras_store_find_by_id(&reload_store, id);
+    assert(node != NULL);
+    assert(validate_utf8(node->summary) == true);
+    assert(validate_utf8(node->raw_arabic) == true);
+    assert(validate_utf8(node->category) == true);
+
+    printf("  [PASS] Decoded Summary: \"%s\" (len=%zu bytes, 100%% valid UTF-8)\n",
+           node->summary, strlen(node->summary));
+
+    unlink(reg_store_path);
+    printf("  [PASS] N-1 Arabic UTF-8 truncation regression suite verified.\n");
+}
+
 int main(void) {
     printf("==================================================================\n");
     printf(" NIBRAS (نبراس): COMPREHENSIVE SYSTEM VERIFICATION SUITE\n");
@@ -289,10 +365,11 @@ int main(void) {
     test_deterministic_entity_extractor();
     test_fademem_decay_and_pruning();
     test_jsonl_memory_store();
+    test_utf8_truncation_regression();
     test_sovereign_privacy_and_grounding();
 
     printf("==================================================================\n");
-    printf(" [SUCCESS] All 5 Nibras verification suites passed deterministically!\n");
+    printf(" [SUCCESS] All 6 Nibras verification suites passed deterministically!\n");
     printf("==================================================================\n");
     return 0;
 }

@@ -15,14 +15,10 @@ import re
 from typing import Dict, Any, List, Optional, Tuple
 
 # 1. Resolve Gomaa Memory OS Import Paths
-GOMAA_SEARCH_PATHS = [
-    os.path.expanduser("~/.gemini/antigravity/scratch/mnemosyne"),
-    os.path.expanduser("~/mnemosyne"),
-    os.path.expanduser("~/gomaa"),
-]
-for p in GOMAA_SEARCH_PATHS:
-    if os.path.isdir(p) and p not in sys.path:
-        sys.path.insert(0, p)
+gomaa_home = os.environ.get("GOMAA_HOME", os.path.expanduser("~/gomaa"))
+gomaa_home = os.path.expanduser(gomaa_home)
+if os.path.isdir(gomaa_home) and gomaa_home not in sys.path:
+    sys.path.insert(0, gomaa_home)
 
 try:
     from gomaa.stores.sqlite import SQLiteStore

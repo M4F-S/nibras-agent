@@ -48,8 +48,10 @@ test: all
 	python3 tests/test_nibras_gomaa.py
 	@echo "[SUCCESS] All Nibras Agent verification suites passed deterministically!"
 
+verify: test
+
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f data/*.jsonl *.jsonl *.audit.jsonl
 
-.PHONY: all test clean
+.PHONY: all test verify clean

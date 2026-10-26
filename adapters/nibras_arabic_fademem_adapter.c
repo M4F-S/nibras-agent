@@ -234,6 +234,14 @@ void nibras_fademem_step_hardened(
 
 #include <ctype.h>
 
+static void nib_strlcpy(char *dst, const char *src, size_t cap) {
+    if (!dst || cap == 0) return;
+    size_t n = src ? strlen(src) : 0;
+    if (n >= cap) n = cap - 1;
+    if (n) memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
 static void add_entity_item(
     nibras_extracted_info_t *info,
     nibras_entity_type_t     type,
@@ -245,10 +253,8 @@ static void add_entity_item(
     nibras_entity_t *ent = &info->entities[info->entity_count++];
     ent->type = type;
     ent->offset = offset;
-    strncpy(ent->label, label, sizeof(ent->label) - 1);
-    ent->label[sizeof(ent->label) - 1] = '\0';
-    strncpy(ent->text, text, sizeof(ent->text) - 1);
-    ent->text[sizeof(ent->text) - 1] = '\0';
+    nib_strlcpy(ent->label, label, sizeof(ent->label));
+    nib_strlcpy(ent->text, text, sizeof(ent->text));
 }
 
 static void extract_phrase_around(const char *start, size_t max_bytes, char *out_buf, size_t out_cap) {
@@ -314,7 +320,7 @@ static bool extract_clock_time(const char *src, char *dst, size_t dst_cap, size_
 
     size_t len = (size_t)(end - start);
     if (len >= dst_cap) len = dst_cap - 1;
-    strncpy(dst, start, len);
+    if (len) memcpy(dst, start, len);
     dst[len] = '\0';
     return true;
 }
@@ -409,7 +415,7 @@ size_t nibras_extract_arabic_entities(
     for (int i = 0; RELATIVE_DATES[i] != NULL; ++i) {
         const char *p = strstr(normalized_text, RELATIVE_DATES[i]);
         if (p) {
-            strncpy(date_buf, RELATIVE_DATES[i], sizeof(date_buf) - 1);
+            nib_strlcpy(date_buf, RELATIVE_DATES[i], sizeof(date_buf));
             date_off = (size_t)(p - normalized_text);
             has_date = true;
             break;
@@ -421,7 +427,7 @@ size_t nibras_extract_arabic_entities(
         for (int i = 0; WEEKDAYS[i] != NULL; ++i) {
             const char *p = strstr(normalized_text, WEEKDAYS[i]);
             if (p) {
-                strncpy(date_buf, WEEKDAYS[i], sizeof(date_buf) - 1);
+                nib_strlcpy(date_buf, WEEKDAYS[i], sizeof(date_buf));
                 date_off = (size_t)(p - normalized_text);
                 has_date = true;
                 break;
@@ -445,7 +451,7 @@ size_t nibras_extract_arabic_entities(
                     extract_phrase_around(scan, 32, date_buf, sizeof(date_buf));
                 } else {
                     date_off = (size_t)(p - normalized_text);
-                    strncpy(date_buf, MONTHS[i], sizeof(date_buf) - 1);
+                    nib_strlcpy(date_buf, MONTHS[i], sizeof(date_buf));
                 }
                 has_date = true;
                 break;
@@ -461,10 +467,10 @@ size_t nibras_extract_arabic_entities(
         snprintf(out_info->datetime_str, sizeof(out_info->datetime_str), "%s %s", date_buf, time_buf);
         add_entity_item(out_info, NIBRAS_ENTITY_DATETIME, "DATETIME", out_info->datetime_str, date_off);
     } else if (has_date) {
-        strncpy(out_info->datetime_str, date_buf, sizeof(out_info->datetime_str) - 1);
+        nib_strlcpy(out_info->datetime_str, date_buf, sizeof(out_info->datetime_str));
         add_entity_item(out_info, NIBRAS_ENTITY_DATETIME, "DATE", out_info->datetime_str, date_off);
     } else if (has_time) {
-        strncpy(out_info->datetime_str, time_buf, sizeof(out_info->datetime_str) - 1);
+        nib_strlcpy(out_info->datetime_str, time_buf, sizeof(out_info->datetime_str));
         add_entity_item(out_info, NIBRAS_ENTITY_DATETIME, "TIME", out_info->datetime_str, time_off);
     }
 
