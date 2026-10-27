@@ -110,11 +110,11 @@ Same three changes as every repo: `GDRIVE_ROOT` env with the personal path as de
 
 `nibras_store_search` is currently a **linear `strstr` scan**: no index, no ranking. That is the gap between the README and the code.
 
-- [ ] Add ranking to the C store: tokenise the summary, score with BM25 (or a small TF-IDF), return top-k with scores. Keep it allocation-light and deterministic — this is the demo.
-- [ ] Keep FadeMem as the pruning policy; rank *after* decay, not instead of it.
-- [ ] Index on load, not per query; a 1,000-note store must answer in < 1 ms.
-- [ ] Expose `search <query>` in the CLI; show the score and why a note ranked.
-- [ ] Test: 5 notes, query a 2-word Arabic/English mix, assert the right note ranks first and the pruned one is absent.
+- [x] Add ranking to the C store: tokenise the summary, score with BM25 (or a small TF-IDF), return top-k with scores. Keep it allocation-light and deterministic — this is the demo.
+- [x] Keep FadeMem as the pruning policy; rank *after* decay, not instead of it.
+- [x] Index on load, not per query; a 1,000-note store must answer in < 1 ms.
+- [x] Expose `search <query>` in the CLI; show the score and why a note ranked.
+- [x] Test: 5 notes, query a 2-word Arabic/English mix, assert the right note ranks first and the pruned one is absent.
 
 **Optional, same round:** a `--semantic` flag that uses gomaa (when installed) for embedding search, falling back to BM25 when absent. Never make it the default path — a judge must not need it.
 
@@ -122,10 +122,10 @@ Same three changes as every repo: `GDRIVE_ROOT` env with the personal path as de
 
 # Round 3 — personal RAG (5–8 days, after Round 2)
 
-- [ ] Corpus = the user's own notes and prior decisions (this is the honest "personal knowledge base").
-- [ ] Chunk, index in SQLite FTS5, retrieve top-k, and **return citations**: note title + line range + `passage_sha256`.
-- [ ] Upgrade `grounding_shield` usage: a factual claim about the user's own data must cite the note it came from, or it is reported as unverified.
-- [ ] Demo: "when did I last meet the DHA chair and what did we decide?" → retrieved note + citation + confidence, no invented date.
+- [x] Corpus = the user's own notes and prior decisions (this is the honest "personal knowledge base").
+- [x] Chunk, index in SQLite FTS5, retrieve top-k, and **return citations**: note title + line range + `passage_sha256`.
+- [x] Upgrade `grounding_shield` usage: a factual claim about the user's own data must cite the note it came from, or it is reported as unverified.
+- [x] Demo: "when did I last meet the DHA chair and what did we decide?" → retrieved note + citation + confidence, no invented date.
 
 **Do not** claim RAG over a model that is not in the repo.
 
