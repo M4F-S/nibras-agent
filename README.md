@@ -25,10 +25,11 @@ In personal cognitive management and executive daily operations across Dubai, in
 ### 3. Architecture & Components
 - **`src/nibras_agent.c`**: Standalone C99 CLI daemon and interactive REPL executive assistant.
 - **`adapters/nibras_arabic_fademem_adapter.c`**: Zero-allocation UTF-8 Arabic normalizer, deterministic entity/action extractor, and FadeMem exponential decay engine ($I(t') = I_0 \cdot 2^{-(t'-t)/\tau_{1/2}}$).
-- **`adapters/nibras_memory_store.c`**: Sovereign JSONL persistent memory store with pinned permanent nodes and full-text search.
+- **`adapters/nibras_memory_store.c`**: Sovereign JSONL persistent memory store with pinned permanent nodes and deterministic BM25 ranking.
+- **`adapters/nibras_rag.c`**: Personal Sovereign RAG engine indexing user notes with SQLite FTS5, returning exact citations (Title + Line Range + SHA-256) and verified by Grounding Shield (anti-hallucination, zero invented dates).
 - **`adapters/grounding_shield.c`**: Deterministic fact-checking engine and PII redactor complying with UAE PDPL Law No. 45 of 2021.
 - **`adapters/nibras_gomaa_bridge.py`**: Optional Python ctypes bridge connecting Nibras to the Gomaa Memory OS.
-- **`tests/test_nibras_suite.c`**: 6-part end-to-end verification suite.
+- **`tests/test_nibras_suite.c`**: 8-part end-to-end verification suite covering Arabic normalization, entity extraction, FadeMem decay, persistent store, UTF-8 safety, BM25 retrieval, Personal RAG citations, and Grounding Shield.
 - **`tests/test_nibras_gomaa.py`**: Gomaa integration test suite (automatically skipped if Gomaa is not installed).
 
 ---
@@ -65,4 +66,13 @@ make test
 
 # Display Executive Cognitive HUD
 ./build/nibras_agent --hud
+
+# Search memory graph with deterministic BM25 ranking
+./build/nibras_agent --search "DIFC ترخيص"
+
+# Retrieve personal knowledge passages with exact citations (Title + Lines + SHA-256)
+./build/nibras_agent --rag-search "DHA chair meeting"
+
+# Answer meeting/decision queries strictly grounded in personal notes (Zero invented dates)
+./build/nibras_agent --rag-qa "when did I last meet the DHA chair and what did we decide?"
 ```

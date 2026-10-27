@@ -17,6 +17,7 @@
 #include "nibras_adapters.h"
 #include "nibras_memory_store.h"
 #include "grounding_shield.h"
+#include "nibras_rag.h"
 
 static void test_arabic_normalizer(void) {
     printf("[TEST 1/5] Running Zero-Allocation UTF-8 Arabic Normalizer tests...\n");
@@ -453,6 +454,122 @@ static void test_bm25_ranked_search(void) {
     printf("  [PASS] BM25 Ranked Retrieval test passed deterministically.\n");
 }
 
+static void test_personal_rag_citations(void) {
+    printf("[TEST Round-3] Running Personal RAG & Note Citation Grounding Test...\n");
+
+    /* 1. SHA-256 NIST Test Vectors Verification */
+    char h1[65], h2[65];
+    nibras_sha256_hex("", 0, h1);
+    assert(strcmp(h1, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") == 0);
+    nibras_sha256_hex("abc", 3, h2);
+    assert(strcmp(h2, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") == 0);
+    printf("  [PASS] FIPS 180-2 SHA-256 verified against NIST test vectors.\n");
+
+    /* 2. SQLite FTS5 RAG Engine Initialization & Note Chunking */
+    nibras_rag_t rag;
+    int rc = nibras_rag_init(&rag, ":memory:");
+    assert(rc == 0);
+
+    const char *dha_minutes = 
+        "Date: 2026-10-15 (15 October 2026)\n"
+        "Attendees: Mohamed Fathy (Founder & Lead Architect), Chair of Dubai Health Authority (DHA)\n"
+        "Discussion: Formal review of UAE Health Data Law No. 2 of 2019 and AI Security Standards\n"
+        "Decision: Formal adoption of statutory AI Security Policy and NABIDH integration roadmap\n"
+        "Action: Phase 1 compliance audit verification by end of Q4 2026";
+
+    size_t chunks = nibras_rag_index_note(&rag, 101, "DHA Executive Meeting Minutes 2026", dha_minutes);
+    assert(chunks >= 1);
+    assert(rag.total_chunks_indexed == chunks);
+    assert(rag.total_notes_indexed == 1);
+
+    /* Index additional board resolution */
+    const char *difc_resolution = 
+        "Date: 2026-09-20\n"
+        "Attendees: Board of Directors, Legal Counsel\n"
+        "Decision: Approved incorporation under DIFC Companies Law No. 5 of 2018\n"
+        "Action: Submit commercial license application to DIFC registrar";
+
+    size_t difc_chunks = nibras_rag_index_note(&rag, 102, "DIFC Corporate Licensing Board Resolution", difc_resolution);
+    assert(difc_chunks >= 1);
+
+    /* 3. Retrieval with Exact Citations (Title + Line Range + SHA-256) */
+    const char *query = "when did I last meet the DHA chair and what did we decide?";
+    nibras_rag_result_t results[4];
+    size_t num = nibras_rag_retrieve(&rag, query, results, 4);
+
+    assert(num >= 1);
+    assert(strcmp(results[0].chunk.note_title, "DHA Executive Meeting Minutes 2026") == 0);
+    assert(results[0].chunk.start_line == 1);
+    assert(results[0].chunk.end_line == 5);
+    assert(strlen(results[0].chunk.passage_sha256) == 64);
+    assert(results[0].score > 0.0);
+    assert(results[0].confidence >= 0.90);
+
+    /* Verify citation format: NoteTitle:L<start>-L<end> [sha256:<hash>] */
+    assert(strstr(results[0].citation, "DHA Executive Meeting Minutes 2026:L1-L5") != NULL);
+    assert(strstr(results[0].citation, results[0].chunk.passage_sha256) != NULL);
+    printf("  [PASS] Retrieved Citation: %s\n", results[0].citation);
+
+    /* 4. Grounding Shield Factual Cross-Verification */
+    /* Accurate claim grounded in note */
+    grounding_claim_t acc_claim = {
+        .claim_text = "Chair of Dubai Health Authority (DHA) approved statutory AI Security Policy",
+        .entity_name = "DHA",
+        .numerical_value = 0.0,
+        .has_numerical = false
+    };
+    grounding_result_t g_acc = nibras_rag_verify_claim(&rag, &acc_claim);
+    assert(g_acc.verdict == GROUNDING_VERIFIED);
+    assert(strstr(g_acc.citation, "DHA Executive Meeting Minutes 2026") != NULL);
+    assert(g_acc.confidence >= 0.95);
+    printf("  [PASS] Grounding Shield: Accurate claim VERIFIED with note citation.\n");
+
+    /* Conflicting numerical claim trips hallucination */
+    grounding_claim_t false_claim = {
+        .claim_text = "Meeting with DHA chair was regarding statutory penalty 999.0",
+        .entity_name = "DHA",
+        .numerical_value = 999.0,
+        .has_numerical = true
+    };
+    grounding_result_t g_false = nibras_rag_verify_claim(&rag, &false_claim);
+    assert(g_false.verdict == GROUNDING_HALLUCINATION_TRIPPED);
+    printf("  [PASS] Grounding Shield: Numerical hallucination TRIPPED and blocked.\n");
+
+    /* Unrecorded entity claim returns UNVERIFIABLE */
+    grounding_claim_t unrec_claim = {
+        .claim_text = "Meeting with Minister of Transport took place last week",
+        .entity_name = "Minister of Transport",
+        .numerical_value = 0.0,
+        .has_numerical = false
+    };
+    grounding_result_t g_unrec = nibras_rag_verify_claim(&rag, &unrec_claim);
+    assert(g_unrec.verdict == GROUNDING_UNVERIFIABLE);
+    printf("  [PASS] Grounding Shield: Unrecorded entity claim returned UNVERIFIABLE.\n");
+
+    /* 5. High-Level Grounded Meeting Recall QA */
+    char answer[512];
+    nibras_rag_result_t cit;
+    grounding_result_t g_qa;
+    int ans_rc = nibras_rag_answer_meeting_query(&rag, query, answer, sizeof(answer), &cit, &g_qa);
+    assert(ans_rc == 1);
+    assert(strstr(answer, "2026-10-15") != NULL);
+    assert(strstr(answer, "Formal adoption of statutory AI Security Policy") != NULL);
+    assert(strstr(answer, "DHA Executive Meeting Minutes 2026:L1-L5") != NULL);
+    assert(g_qa.verdict == GROUNDING_VERIFIED);
+    printf("  [PASS] Grounded QA: Found authoritative date 2026-10-15 and decisions.\n");
+
+    /* Assert Non-Invented Date Guarantee for unrecorded meeting */
+    ans_rc = nibras_rag_answer_meeting_query(&rag, "when did I last meet the Minister of Transport?", answer, sizeof(answer), &cit, &g_qa);
+    assert(ans_rc == 0);
+    assert(strstr(answer, "[UNVERIFIED]") != NULL);
+    assert(strstr(answer, "Refusing to invent dates") != NULL);
+    assert(g_qa.verdict == GROUNDING_UNVERIFIABLE);
+    printf("  [PASS] Anti-Hallucination: Refused to invent dates for unrecorded meeting.\n");
+
+    nibras_rag_close(&rag);
+    printf("  [PASS] Round-3 Personal RAG with Note Citations verified successfully!\n");
+}
+
 int main(void) {
     printf("==================================================================\n");
     printf(" NIBRAS (نبراس): COMPREHENSIVE SYSTEM VERIFICATION SUITE\n");
@@ -464,10 +581,11 @@ int main(void) {
     test_jsonl_memory_store();
     test_utf8_truncation_regression();
     test_bm25_ranked_search();
+    test_personal_rag_citations();
     test_sovereign_privacy_and_grounding();
 
     printf("==================================================================\n");
-    printf(" [SUCCESS] All 7 Nibras verification suites passed deterministically!\n");
+    printf(" [SUCCESS] All 8 Nibras verification suites passed deterministically!\n");
     printf("==================================================================\n");
     return 0;
 }

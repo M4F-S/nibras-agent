@@ -5,4 +5,4 @@ This product includes software derived from:
   - Almaz (C99 cognitive organism)    — © Mohamed Fathy — https://github.com/M4F-S/Almaz
   - gomaa (agent memory OS, optional) — © Mohamed Fathy — https://github.com/M4F-S/gomaa
 Components: adapters/nibras_arabic_fademem_adapter.c, adapters/nibras_memory_store.c,
-src/nibras_agent.c, adapters/nibras_gomaa_bridge.py
+adapters/nibras_rag.c, src/nibras_agent.c, adapters/nibras_gomaa_bridge.py

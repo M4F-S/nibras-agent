@@ -3,7 +3,7 @@
 
 CC ?= cc
 CFLAGS ?= -std=c99 -Wall -Wextra -Werror -O2 -Iadapters
-LDFLAGS ?= -lm
+LDFLAGS ?= -lm -lsqlite3
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -21,7 +21,8 @@ TEST_BIN = $(BUILD_DIR)/test_nibras
 
 ADAPTER_SRCS = adapters/nibras_arabic_fademem_adapter.c \
                adapters/grounding_shield.c \
-               adapters/nibras_memory_store.c
+               adapters/nibras_memory_store.c \
+               adapters/nibras_rag.c
 
 all: $(BUILD_DIR) $(LIB) $(AGENT) $(TEST_BIN)
 
