@@ -4,7 +4,9 @@
 //! Canonical Master Specification §4: AGENT 3: NIBRAS
 
 pub mod civic;
+pub mod memory;
 pub mod safety;
 
 pub use civic::*;
+pub use memory::*;
 pub use safety::*;

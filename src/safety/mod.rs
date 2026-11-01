@@ -95,28 +95,7 @@ pub struct TelemetrySnapshot {
     pub cognitive_friction_index: f64,
 }
 
-/// Helper function to convert C char buffer to Rust String
-pub(crate) fn c_chars_to_string(buf: &[c_char]) -> String {
-    let mut bytes = Vec::new();
-    for &b in buf {
-        if b == 0 {
-            break;
-        }
-        bytes.push(b as u8);
-    }
-    String::from_utf8_lossy(&bytes).trim().to_string()
-}
 
-/// Helper to copy Rust string into fixed C char buffer
-pub(crate) fn copy_string_to_c_chars(s: &str, buf: &mut [c_char]) {
-    let bytes = s.as_bytes();
-    let max = buf.len().saturating_sub(1);
-    let len = bytes.len().min(max);
-    for i in 0..len {
-        buf[i] = bytes[i] as c_char;
-    }
-    buf[len] = 0;
-}
 
 /// Redact PII from text using hardened C99 redactor
 pub fn redact_pii(text: &str) -> String {
@@ -363,5 +342,120 @@ impl Drop for PersonalRag {
         unsafe {
             nibras_rag_close(&mut self.raw);
         }
+    }
+}
+
+/// Safe wrapper around C99 Nibras Persistent Memory Store
+pub struct C99MemoryStore {
+    inner: Box<NibrasMemoryStore>,
+}
+
+impl C99MemoryStore {
+    pub fn new() -> Self {
+        let inner: Box<NibrasMemoryStore> = unsafe {
+            let layout = std::alloc::Layout::new::<NibrasMemoryStore>();
+            let ptr = std::alloc::alloc_zeroed(layout) as *mut NibrasMemoryStore;
+            if ptr.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            Box::from_raw(ptr)
+        };
+        Self { inner }
+    }
+
+    pub fn init_with_file(filepath: &str) -> Result<Self, i32> {
+        let mut store = Self::new();
+        let c_path = CString::new(filepath).unwrap_or_default();
+        let rc = unsafe { nibras_store_init(store.as_mut_ptr(), c_path.as_ptr()) };
+        if rc == 0 {
+            Ok(store)
+        } else {
+            Err(rc)
+        }
+    }
+
+    pub fn as_ptr(&self) -> *const NibrasMemoryStore {
+        &*self.inner as *const NibrasMemoryStore
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut NibrasMemoryStore {
+        &mut *self.inner as *mut NibrasMemoryStore
+    }
+
+    pub fn count(&self) -> usize {
+        self.inner.count
+    }
+
+    pub fn add_node(&mut self, node: &NibrasMemoryNode) -> u64 {
+        unsafe { nibras_store_add_node(self.as_mut_ptr(), node as *const NibrasMemoryNode) }
+    }
+
+    pub fn find_by_id(&mut self, id: u64) -> Option<&NibrasMemoryNode> {
+        let ptr = unsafe { nibras_store_find_by_id(self.as_mut_ptr(), id) };
+        if ptr.is_null() {
+            None
+        } else {
+            unsafe { Some(&*ptr) }
+        }
+    }
+
+    pub fn set_pin(&mut self, id: u64, pin: bool) -> bool {
+        let rc = unsafe { nibras_store_set_pin(self.as_mut_ptr(), id, pin) };
+        rc == 0
+    }
+
+    pub fn invert_valence(&mut self, id: u64) -> bool {
+        let rc = unsafe { nibras_store_invert_valence(self.as_mut_ptr(), id) };
+        rc == 0
+    }
+
+    pub fn step_decay(
+        &mut self,
+        now_utc: u64,
+        half_life_sec: f64,
+        sim_time_scale: f64,
+        consolidation_window_sec: f64,
+    ) -> NibrasTelemetrySnapshot {
+        let mut snap = NibrasTelemetrySnapshot::default();
+        unsafe {
+            nibras_store_step_decay(
+                self.as_mut_ptr(),
+                now_utc,
+                half_life_sec,
+                sim_time_scale,
+                consolidation_window_sec,
+                &mut snap,
+            );
+        }
+        snap
+    }
+
+    pub fn get_snapshot(&self) -> NibrasTelemetrySnapshot {
+        let mut snap = NibrasTelemetrySnapshot::default();
+        unsafe {
+            nibras_store_get_snapshot(self.as_ptr(), &mut snap);
+        }
+        snap
+    }
+
+    pub fn search(&self, query: &str, max_matches: usize) -> Vec<NibrasMemoryNode> {
+        let c_query = CString::new(query).unwrap_or_default();
+        let mut matches = vec![NibrasMemoryNode::default(); max_matches.min(64)];
+        let count = unsafe {
+            nibras_store_search(
+                self.as_ptr(),
+                c_query.as_ptr(),
+                matches.as_mut_ptr(),
+                matches.len(),
+            )
+        };
+        matches.truncate(count);
+        matches
+    }
+}
+
+impl Default for C99MemoryStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
