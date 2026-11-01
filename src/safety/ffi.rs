@@ -4,6 +4,29 @@
 use serde::{Deserialize, Serialize};
 use std::os::raw::{c_char, c_double, c_int, c_void};
 
+/// Helper function to convert C char buffer to Rust String
+pub fn c_chars_to_string(buf: &[c_char]) -> String {
+    let mut bytes = Vec::new();
+    for &b in buf {
+        if b == 0 {
+            break;
+        }
+        bytes.push(b as u8);
+    }
+    String::from_utf8_lossy(&bytes).trim().to_string()
+}
+
+/// Helper to copy Rust string into fixed C char buffer
+pub fn copy_string_to_c_chars(s: &str, buf: &mut [c_char]) {
+    let bytes = s.as_bytes();
+    let max = buf.len().saturating_sub(1);
+    let len = bytes.len().min(max);
+    for i in 0..len {
+        buf[i] = bytes[i] as c_char;
+    }
+    buf[len] = 0;
+}
+
 /// Grounding Shield Verdict
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -424,6 +447,11 @@ extern "C" {
         out_matches: *mut NibrasMemoryNode,
         max_matches: usize,
     ) -> usize;
+
+    pub fn nibras_store_get_snapshot(
+        store: *const NibrasMemoryStore,
+        out_snap: *mut NibrasTelemetrySnapshot,
+    );
 
     // Personal RAG
     pub fn nibras_sha256_hex(

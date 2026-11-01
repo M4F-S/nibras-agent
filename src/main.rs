@@ -3,6 +3,7 @@
 //! Founder / Lead Systems Architect: Mohamed Fathy, BPharm
 
 use nibras::civic::*;
+use nibras::memory::*;
 use std::env;
 use std::process;
 
@@ -41,7 +42,32 @@ fn print_usage() {
         "{}",
         r#"
 USAGE:
-    nibras civic <COMMAND> [OPTIONS]
+    nibras <COMMAND> [SUBCOMMAND] [OPTIONS]
+
+COMMAND SUITES:
+    memory <add|decay|stats|list>     FadeMem Biological Memory & Context Pruning
+    vault  <store|get|verify|list>   Sovereign Family Office Air-Gapped Vault
+    civic  <COMMAND>                 Dubai Sovereign Civic Navigator Engines
+
+MEMORY COMMANDS:
+    memory add --summary <TEXT> [--category <CAT>] [--pinned] [--tokens <N>]
+        Ingest memory node with Ebbinghaus retention stability and optional pinning.
+    memory decay [--hours <H>] [--days <D>]
+        Simulate biological time decay and prune nodes below retention threshold (R < 0.25).
+    memory stats [--complexity <C>] [--confidence <R>] [--risk <REG>]
+        Display live HUD telemetry snapshot, tokens saved %, and Cognitive Friction Index (CFI).
+    memory list [--filter <active|pruned|pinned|all>]
+        Inspect episodic, distilled rules, and archived memory nodes.
+
+VAULT COMMANDS:
+    vault store --key <KEY> --value <JSON|STR> [--type <TYPE>]
+        Store document or credential into local air-gapped SQLite vault with SHA-256 provenance.
+    vault get --key <KEY>
+        Retrieve record and verify cryptographic tamper-evident SHA-256 integrity.
+    vault verify [--key <KEY>]
+        Inspect and audit cryptographic checksums across all stored vault records.
+    vault list
+        List all vault keys, types, and cryptographic timestamps.
 
 CIVIC COMMANDS:
     golden-visa --category <real-estate|skilled> [OPTIONS]
@@ -501,6 +527,339 @@ fn handle_uae_pass(args: &[String], is_json: bool) {
     }
 }
 
+fn handle_memory(args: &[String], is_json: bool) {
+    if args.is_empty() {
+        eprintln!("Error: memory requires a subcommand (add, decay, stats, list)");
+        process::exit(1);
+    }
+
+    let sub_cmd = &args[0];
+    let sub_args = &args[1..];
+
+    match sub_cmd.as_str() {
+        "add" => {
+            let summary = get_arg_value(sub_args, "--summary").unwrap_or_else(|| {
+                eprintln!("Error: --summary is required for 'memory add'");
+                process::exit(1);
+            });
+            let category = get_arg_value(sub_args, "--category").unwrap_or_else(|| "general".to_string());
+            let is_pinned = has_flag(sub_args, "--pinned");
+            let token_cost = get_arg_value(sub_args, "--tokens")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or_else(|| (summary.split_whitespace().count() * 15 + 40) as u32);
+            let file_path = get_arg_value(sub_args, "--file").unwrap_or_else(|| "data/nibras_memory.json".to_string());
+
+            let mut engine = FadeMemEngine::load_from_json(&file_path).unwrap_or_default();
+            let node_id = engine.add_node(&summary, &category, is_pinned, token_cost);
+            if let Err(e) = engine.save_to_json(&file_path) {
+                eprintln!("Warning: failed to persist memory: {}", e);
+            }
+
+            let node = engine.find_node(node_id).unwrap();
+
+            if is_json {
+                println!("{}", serde_json::to_string_pretty(node).unwrap());
+            } else {
+                println!("┌─────────────────────────────────────────────────────────────────┐");
+                println!("│ NIBRAS FADEMEM: MEMORY NODE INGESTED                            │");
+                println!("├─────────────────────────────────────────────────────────────────┤");
+                println!("│ Node ID:            #{}", node.id);
+                println!("│ Summary:            {}", node.summary);
+                println!("│ Category:           {}", node.category);
+                println!("│ Pinned Invariant:   {}", if node.is_pinned { "YES (Immune to Decay - R ≡ 1.0)" } else { "NO (Biological Ebbinghaus Decay)" });
+                println!("│ Initial Intensity:  {:.2}", node.initial_intensity);
+                println!("│ Token Cost:         {} tokens", node.token_cost);
+                println!("│ State:              {:?}", node.state);
+                println!("│ Statutory Weight:   {:.1}x", node.statutory_weight);
+                println!("└─────────────────────────────────────────────────────────────────┘");
+            }
+        }
+        "decay" => {
+            let hours = get_arg_value(sub_args, "--hours")
+                .and_then(|s| s.parse::<f64>().ok())
+                .or_else(|| get_arg_value(sub_args, "--days").and_then(|s| s.parse::<f64>().ok()).map(|d| d * 24.0))
+                .unwrap_or(72.0);
+            let file_path = get_arg_value(sub_args, "--file").unwrap_or_else(|| "data/nibras_memory.json".to_string());
+
+            let mut engine = FadeMemEngine::load_from_json(&file_path).unwrap_or_default();
+            let snap = engine.simulate_decay_hours(hours);
+            if let Err(e) = engine.save_to_json(&file_path) {
+                eprintln!("Warning: failed to persist memory after decay: {}", e);
+            }
+
+            if is_json {
+                println!("{}", serde_json::to_string_pretty(&snap).unwrap());
+            } else {
+                println!("┌─────────────────────────────────────────────────────────────────┐");
+                println!("│ NIBRAS FADEMEM: BIOLOGICAL DECAY & CONTEXT PRUNING SIMULATION   │");
+                println!("├─────────────────────────────────────────────────────────────────┤");
+                println!("│ Simulated Time:     {} hours ({:.1} days)", hours, hours / 24.0);
+                println!("│ Total Raw Tokens:   {} tokens", snap.total_raw_tokens);
+                println!("│ Active Prompt Tkns: {} tokens", snap.active_tokens_after_prune);
+                println!("│ Token Reduction:    {}% (Benchmark >85%: {})", snap.tokens_saved_pct, if snap.tokens_saved_pct >= 85 { "ACHIEVED" } else { "IN PROGRESS" });
+                println!("│ Active Nodes:       {}", snap.active_nodes_count);
+                println!("│ Pruned to Archive:  {}", snap.pruned_nodes_count);
+                println!("│ Distilled Rules:    {}", snap.distilled_rules_count);
+                println!("│ Cognitive Friction: {:.3} (CFI)", snap.cognitive_friction_index);
+                println!("│ Output Mode Gate:   {:?}", snap.output_mode);
+                println!("└─────────────────────────────────────────────────────────────────┘");
+            }
+        }
+        "stats" => {
+            let file_path = get_arg_value(sub_args, "--file").unwrap_or_else(|| "data/nibras_memory.json".to_string());
+            let engine = FadeMemEngine::load_from_json(&file_path).unwrap_or_default();
+
+            let complexity = get_arg_value(sub_args, "--complexity").and_then(|s| s.parse::<f64>().ok());
+            let confidence = get_arg_value(sub_args, "--confidence").and_then(|s| s.parse::<f64>().ok());
+            let risk = get_arg_value(sub_args, "--risk").and_then(|s| s.parse::<f64>().ok());
+
+            let custom_factors = if complexity.is_some() || confidence.is_some() || risk.is_some() {
+                Some(CognitiveFrictionFactors {
+                    delta_complexity: complexity.unwrap_or(engine.cfi_factors.delta_complexity),
+                    confidence_rag: confidence.unwrap_or(engine.cfi_factors.confidence_rag),
+                    risk_regulatory: risk.unwrap_or(engine.cfi_factors.risk_regulatory),
+                })
+            } else {
+                None
+            };
+
+            let snap = engine.get_telemetry_snapshot(custom_factors);
+
+            if is_json {
+                println!("{}", serde_json::to_string_pretty(&snap).unwrap());
+            } else {
+                println!("┌─────────────────────────────────────────────────────────────────┐");
+                println!("│ NIBRAS LIVE HUD TELEMETRY & COGNITIVE FRICTION INDEX (CFI)      │");
+                println!("├─────────────────────────────────────────────────────────────────┤");
+                println!("│ Total Raw Trajectory:    {} tokens", snap.total_raw_tokens);
+                println!("│ Active Prompt Context:   {} tokens", snap.active_tokens_after_prune);
+                println!("│ Token Footprint Saved:   {}% (Target >85%: {})", snap.tokens_saved_pct, if snap.tokens_saved_pct >= 85 { "VERIFIED" } else { "PENDING DECAY" });
+                println!("│ Distilled Rules Count:   {}", snap.distilled_rules_count);
+                println!("│ Active Context Nodes:    {}", snap.active_nodes_count);
+                println!("│ Offline Archived Nodes:  {}", snap.pruned_nodes_count);
+                println!("│ Pinned Statutory Nodes:  {}", snap.pinned_nodes_count);
+                println!("├─────────────────────────────────────────────────────────────────┤");
+                println!("│ Cognitive Friction (CFI): {:.3} [Formula: 0.3*ΔC + 0.3*(1-R) + 0.4*Risk]", snap.cognitive_friction_index);
+                println!("│ Agent Mode Gate:          {} (Threshold: 0.70)", match snap.output_mode {
+                    AgentOutputMode::ConversationalChatter => "CONVERSATIONAL CHATTER",
+                    AgentOutputMode::StructuredDeclarative => "STRUCTURED DECLARATIVE (ENFORCED)",
+                });
+                println!("└─────────────────────────────────────────────────────────────────┘");
+            }
+        }
+        "list" => {
+            let file_path = get_arg_value(sub_args, "--file").unwrap_or_else(|| "data/nibras_memory.json".to_string());
+            let engine = FadeMemEngine::load_from_json(&file_path).unwrap_or_default();
+            let filter = get_arg_value(sub_args, "--filter").unwrap_or_else(|| "all".to_string()).to_lowercase();
+
+            let filtered_nodes: Vec<_> = engine.nodes.iter().filter(|n| {
+                match filter.as_str() {
+                    "active" => n.is_active(),
+                    "pruned" => n.is_pruned(),
+                    "pinned" => n.is_pinned,
+                    "distilled" => n.is_distilled(),
+                    _ => true,
+                }
+            }).collect();
+
+            if is_json {
+                println!("{}", serde_json::to_string_pretty(&filtered_nodes).unwrap());
+            } else {
+                println!("┌─────────────────────────────────────────────────────────────────────────────┐");
+                println!("│ NIBRAS FADEMEM MEMORY NODES CATALOG (Filter: {:<12})                      │", filter);
+                println!("├─────┬─────────────────────────────────┬──────────┬────────┬───────┬─────────┤");
+                println!("│ ID  │ SUMMARY                         │ CATEGORY │ INTENS │ RETNT │ STATE   │");
+                println!("├─────┼─────────────────────────────────┼──────────┼────────┼───────┼─────────┤");
+                for n in &filtered_nodes {
+                    let sum = if n.summary.len() > 31 { format!("{}...", &n.summary[..28]) } else { n.summary.clone() };
+                    let state_str = format!("{:?}", n.state);
+                    println!("│ {:<3} │ {:<31} │ {:<8} │ {:<6.2} │ {:<5.2} │ {:<7} │",
+                        n.id, sum, &n.category.chars().take(8).collect::<String>(), n.current_intensity, n.retention, state_str.chars().take(7).collect::<String>()
+                    );
+                }
+                println!("└─────┴─────────────────────────────────┴──────────┴────────┴───────┴─────────┘");
+            }
+        }
+        _ => {
+            eprintln!("Unknown memory subcommand: '{}'. Available: add, decay, stats, list", sub_cmd);
+            process::exit(1);
+        }
+    }
+}
+
+fn handle_vault(args: &[String], is_json: bool) {
+    if args.is_empty() {
+        eprintln!("Error: vault requires a subcommand (store, get, verify, list)");
+        process::exit(1);
+    }
+
+    let sub_cmd = &args[0];
+    let sub_args = &args[1..];
+    let db_path = get_arg_value(sub_args, "--db").unwrap_or_else(|| "data/nibras_vault.db".to_string());
+
+    let vault = match FamilyVault::open(&db_path) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error opening sovereign vault at '{}': {}", db_path, e);
+            process::exit(1);
+        }
+    };
+
+    match sub_cmd.as_str() {
+        "store" => {
+            let key = get_arg_value(sub_args, "--key").unwrap_or_else(|| {
+                eprintln!("Error: --key is required for 'vault store'");
+                process::exit(1);
+            });
+            let value = get_arg_value(sub_args, "--value").unwrap_or_else(|| {
+                eprintln!("Error: --value is required for 'vault store'");
+                process::exit(1);
+            });
+            let record_type = get_arg_value(sub_args, "--type").unwrap_or_else(|| "credential".to_string());
+
+            let record = match vault.store_kv(&key, &value, Some(&record_type)) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Error storing record in vault: {}", e);
+                    process::exit(1);
+                }
+            };
+
+            if is_json {
+                println!("{}", serde_json::to_string_pretty(&record).unwrap());
+            } else {
+                println!("┌─────────────────────────────────────────────────────────────────┐");
+                println!("│ NIBRAS SOVEREIGN FAMILY OFFICE VAULT: RECORD SECURED            │");
+                println!("├─────────────────────────────────────────────────────────────────┤");
+                println!("│ Key:              {}", record.key);
+                println!("│ Record Type:      {}", record.record_type);
+                println!("│ SHA-256 Checksum: {}", record.sha256_checksum);
+                println!("│ Provenance:       Tamper-Evident SHA-256 Digest Inserted");
+                println!("│ Sovereignty:      100% On-Device Air-Gap (UAE PDPL Law 45)");
+                println!("│ Created UTC:      {}", record.created_at);
+                println!("└─────────────────────────────────────────────────────────────────┘");
+            }
+        }
+        "get" => {
+            let key = get_arg_value(sub_args, "--key").unwrap_or_else(|| {
+                eprintln!("Error: --key is required for 'vault get'");
+                process::exit(1);
+            });
+
+            match vault.get_kv(&key) {
+                Ok(record) => {
+                    if is_json {
+                        println!("{}", serde_json::to_string_pretty(&record).unwrap());
+                    } else {
+                        println!("┌─────────────────────────────────────────────────────────────────┐");
+                        println!("│ NIBRAS SOVEREIGN FAMILY OFFICE VAULT: RECORD RETRIEVED          │");
+                        println!("├─────────────────────────────────────────────────────────────────┤");
+                        println!("│ Key:              {}", record.key);
+                        println!("│ Record Type:      {}", record.record_type);
+                        println!("│ SHA-256 Checksum: {}", record.sha256_checksum);
+                        println!("│ Integrity State:  VERIFIED (Tamper-evident match)");
+                        println!("│ Sovereignty:      100% On-Device Air-Gap (Zero Cloud Egress)");
+                        println!("│ Timestamp:        {}", record.updated_at);
+                        println!("├─────────────────────────────────────────────────────────────────┤");
+                        println!("│ Stored Value:     {}", record.value);
+                        println!("└─────────────────────────────────────────────────────────────────┘");
+                    }
+                }
+                Err(VaultError::TamperDetected { key, expected, computed }) => {
+                    eprintln!("CRITICAL SECURITY ALERT: TAMPER DETECTED FOR RECORD '{}'", key);
+                    eprintln!("Stored Checksum:   {}", expected);
+                    eprintln!("Computed Checksum: {}", computed);
+                    process::exit(2);
+                }
+                Err(VaultError::NotFound(key)) => {
+                    eprintln!("Record not found in vault: '{}'", key);
+                    process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("Error retrieving from vault: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+        "verify" => {
+            if let Some(key) = get_arg_value(sub_args, "--key") {
+                match vault.verify_kv(&key) {
+                    Ok(res) => {
+                        if is_json {
+                            println!("{}", serde_json::to_string_pretty(&res).unwrap());
+                        } else {
+                            println!("┌─────────────────────────────────────────────────────────────────┐");
+                            println!("│ VAULT INTEGRITY AUDIT: KEY '{}'", res.key_or_id);
+                            println!("├─────────────────────────────────────────────────────────────────┤");
+                            println!("│ Status:   {}", if res.is_valid { "PASS (VERIFIED CRYPTOGRAPHIC MATCH)" } else { "FAIL (TAMPER DETECTED!)" });
+                            println!("│ Stored:   {}", res.stored_checksum);
+                            println!("│ Computed: {}", res.computed_checksum);
+                            println!("└─────────────────────────────────────────────────────────────────┘");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Verification failed: {}", e);
+                        process::exit(1);
+                    }
+                }
+            } else {
+                let results = match vault.verify_all_kv() {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("Verification scan failed: {}", e);
+                        process::exit(1);
+                    }
+                };
+
+                if is_json {
+                    println!("{}", serde_json::to_string_pretty(&results).unwrap());
+                } else {
+                    println!("┌─────────────────────────────────────────────────────────────────────────────┐");
+                    println!("│ NIBRAS SOVEREIGN VAULT: FULL CRYPTOGRAPHIC INTEGRITY AUDIT                  │");
+                    println!("├──────────────────────────┬──────────────┬──────────────┬────────────────────┤");
+                    println!("│ KEY                      │ TYPE         │ STATUS       │ SHA-256 (PREFIX)   │");
+                    println!("├──────────────────────────┼──────────────┼──────────────┼────────────────────┤");
+                    for r in &results {
+                        let status = if r.is_valid { "PASS" } else { "FAIL (TAMPER)" };
+                        let prefix: String = r.stored_checksum.chars().take(16).collect();
+                        println!("│ {:<24} │ {:<12} │ {:<12} │ {}... │", r.key_or_id, r.record_type, status, prefix);
+                    }
+                    println!("└──────────────────────────┴──────────────┴──────────────┴────────────────────┘");
+                }
+            }
+        }
+        "list" => {
+            let records = match vault.list_kv() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("List failed: {}", e);
+                    process::exit(1);
+                }
+            };
+
+            if is_json {
+                println!("{}", serde_json::to_string_pretty(&records).unwrap());
+            } else {
+                println!("┌─────────────────────────────────────────────────────────────────────────────┐");
+                println!("│ NIBRAS SOVEREIGN VAULT: STORED CREDENTIALS & DOCUMENTS CATALOG              │");
+                println!("├──────────────────────────┬──────────────┬────────────────────┬──────────────┤");
+                println!("│ KEY                      │ TYPE         │ SHA-256 PREFIX     │ UPDATED      │");
+                println!("├──────────────────────────┼──────────────┼────────────────────┼──────────────┤");
+                for r in &records {
+                    let prefix: String = r.sha256_checksum.chars().take(16).collect();
+                    let date_short: String = r.updated_at.chars().take(12).collect();
+                    println!("│ {:<24} │ {:<12} │ {}... │ {:<12} │", r.key, r.record_type, prefix, date_short);
+                }
+                println!("└──────────────────────────┴──────────────┴────────────────────┴──────────────┘");
+            }
+        }
+        _ => {
+            eprintln!("Unknown vault subcommand: '{}'. Available: store, get, verify, list", sub_cmd);
+            process::exit(1);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -519,7 +878,11 @@ fn main() {
     // Command dispatch
     let primary_cmd = &args[1];
 
-    if primary_cmd == "civic" {
+    if primary_cmd == "memory" {
+        handle_memory(&args[2..], is_json);
+    } else if primary_cmd == "vault" {
+        handle_vault(&args[2..], is_json);
+    } else if primary_cmd == "civic" {
         if args.len() < 3 {
             print_usage();
             return;
