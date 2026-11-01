@@ -29,7 +29,7 @@ fi
 if [[ -d "$GDRIVE_ROOT" ]]; then
     echo "[2/3] Mirroring to Google Drive..."
     mkdir -p "$GDRIVE_DIR"
-    RSYNC_FLAGS=(-av --exclude=".git" --exclude="build" --exclude="*.dylib" --exclude="*.so" --exclude="*.o" --exclude="*.jsonl" --exclude="__pycache__")
+    RSYNC_FLAGS=(-av --exclude=".git" --exclude="build" --exclude="target" --exclude="*.dylib" --exclude="*.so" --exclude="*.o" --exclude="*.jsonl" --exclude="__pycache__")
     if [[ "$RSYNC_DELETE" == "1" ]]; then
         RSYNC_FLAGS+=(--delete)
     fi
