@@ -505,3 +505,96 @@ fn test_c99_fademem_and_memory_store_ffi_linkage() {
     assert_eq!(node_after.state, TrajState::DistilledRule);
     assert_eq!(node_after.current_intensity, 1.0);
 }
+
+#[test]
+fn test_aes256_gcm_vault_encryption_at_rest_and_authenticated_tamper_detection() {
+    // SPRINT-10: Advisory A-2 Remediation Verification
+    // UAE Personal Data Protection Law (Federal Decree-Law 45/2021 Art. 21) & DESC ISR v3.1
+    let vault = FamilyVault::open_in_memory().expect("Failed to open air-gapped in-memory vault");
+
+    let sensitive_key = "patient_dna_profile_uae_001";
+    let sensitive_plaintext = "{\"emirates_id\":\"784-1988-1234567-1\",\"genomic_marker\":\"HLA-B*5701-POSITIVE\",\"med_risk\":\"ABACAVIR_FATAL_HYPERSENSITIVITY\"}";
+
+    // 1. Store record under authenticated encryption at rest
+    let stored_rec = vault
+        .store_kv(sensitive_key, sensitive_plaintext, Some("medical_genomics"))
+        .expect("Store encrypted KV must succeed");
+
+    assert_eq!(stored_rec.key, sensitive_key);
+    assert_eq!(stored_rec.value, sensitive_plaintext);
+    assert_eq!(stored_rec.record_type, "medical_genomics");
+    assert!(!stored_rec.sha256_checksum.is_empty(), "HMAC checksum must be non-empty");
+
+    // 2. CRITICAL AUDIT CHECK: Verify RAW SQLite storage contains ZERO plaintext
+    let raw_db_value = vault
+        .get_raw_kv_value(sensitive_key)
+        .expect("Raw SQLite query must succeed");
+
+    assert!(
+        !raw_db_value.contains("784-1988"),
+        "LEAK DETECTED: Emirates ID must not appear in raw SQLite storage"
+    );
+    assert!(
+        !raw_db_value.contains("HLA-B*5701"),
+        "LEAK DETECTED: Genomic markers must not appear in raw SQLite storage"
+    );
+    assert!(
+        !raw_db_value.contains("ABACAVIR"),
+        "LEAK DETECTED: Medical risk details must not appear in raw SQLite storage"
+    );
+    assert!(
+        !raw_db_value.contains("genomic_marker"),
+        "LEAK DETECTED: Plaintext JSON keys must not appear in raw SQLite storage"
+    );
+
+    // Verify raw storage format: <24-hex-char-nonce>:<hex-ciphertext-and-tag>
+    let parts: Vec<&str> = raw_db_value.split(':').collect();
+    assert_eq!(
+        parts.len(),
+        2,
+        "Raw value must be formatted as '<nonce_hex>:<ciphertext_hex>'"
+    );
+    assert_eq!(
+        parts[0].len(),
+        24,
+        "Nonce must be exactly 12 bytes = 24 hex characters"
+    );
+    assert!(
+        parts[1].len() >= 32,
+        "Ciphertext with 16-byte GCM tag must be >= 32 hex characters"
+    );
+
+    // 3. Authenticated retrieval returns 100% accurate original plaintext
+    let fetched_rec = vault
+        .get_kv(sensitive_key)
+        .expect("Authenticated get_kv must decrypt transparently");
+    assert_eq!(fetched_rec.value, sensitive_plaintext);
+    assert_eq!(fetched_rec.key, sensitive_key);
+
+    // Also verify via list_records() / list_kv()
+    let listed = vault
+        .list_records()
+        .expect("list_records must return decrypted records");
+    let match_rec = listed
+        .iter()
+        .find(|r| r.key == sensitive_key)
+        .expect("Record must be present in list_records");
+    assert_eq!(match_rec.value, sensitive_plaintext);
+
+    // 4. Verify tamper-evidence on corrupted ciphertext
+    vault
+        .simulate_tamper_kv(sensitive_key, "malicious_plaintext_injection_without_valid_auth_tag")
+        .expect("simulate_tamper_kv");
+
+    let tamper_result = vault.get_kv(sensitive_key);
+    assert!(
+        matches!(tamper_result, Err(VaultError::TamperDetected { .. })),
+        "Tampered SQLite value must fail closed with VaultError::TamperDetected"
+    );
+
+    let verify_audit = vault
+        .verify_kv(sensitive_key)
+        .expect("verify_kv must return result");
+    assert!(!verify_audit.is_valid, "Tampered record must not be valid");
+    assert!(verify_audit.tampered, "Tampered record must flag tampered=true");
+}
