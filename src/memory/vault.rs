@@ -4,13 +4,20 @@
 //! Canonical Master Specification §4.2: Sovereign Privacy & Air-Gapped Local Storage
 //! UAE Federal Decree-Law No. 45 of 2021 (PDPL) & DESC ISR v3.1 Compliant
 
+use aes_gcm::{
+    aead::{Aead, AeadCore, KeyInit as AeadKeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
 use chrono::Utc;
+use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// Vault Error enumeration
 #[derive(Debug, Error)]
@@ -40,6 +47,78 @@ pub fn compute_sha256(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
+}
+
+/// Derive or retrieve vault master key (from NIBRAS_VAULT_KEY or deterministic local fallback)
+pub fn get_vault_master_key() -> [u8; 32] {
+    let key_material = std::env::var("NIBRAS_VAULT_KEY")
+        .unwrap_or_else(|_| "nibras-sovereign-vault-aes256-master-key-2027".to_string());
+    let mut hasher = Sha256::new();
+    hasher.update(key_material.as_bytes());
+    let result = hasher.finalize();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&result);
+    key
+}
+
+/// Compute keyed HMAC-SHA256 hexadecimal string
+pub fn compute_hmac_sha256(key: &[u8], data: &[u8]) -> String {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC can take key of any size");
+    mac.update(data);
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// Encrypt plaintext into `<nonce_hex>:<ciphertext_hex>` using AES-256-GCM
+pub fn encrypt_vault_value(plaintext: &str, master_key: &[u8; 32]) -> Result<String, VaultError> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(master_key));
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext.as_bytes())
+        .map_err(|e| VaultError::SerializationError(format!("AES-GCM encryption failed: {e}")))?;
+    Ok(format!("{}:{}", hex::encode(nonce), hex::encode(ciphertext)))
+}
+
+/// Decrypt `<nonce_hex>:<ciphertext_hex>` using AES-256-GCM
+pub fn decrypt_vault_value(stored_value: &str, master_key: &[u8; 32]) -> Result<String, VaultError> {
+    let (nonce_hex, ct_hex) = stored_value
+        .split_once(':')
+        .ok_or_else(|| VaultError::TamperDetected {
+            key: "unknown".to_string(),
+            expected: "valid nonce:ciphertext format".to_string(),
+            computed: "malformed ciphertext format".to_string(),
+        })?;
+
+    let nonce_bytes = hex::decode(nonce_hex).map_err(|_| VaultError::TamperDetected {
+        key: "unknown".to_string(),
+        expected: "valid hex nonce".to_string(),
+        computed: "invalid hex nonce".to_string(),
+    })?;
+
+    if nonce_bytes.len() != 12 {
+        return Err(VaultError::TamperDetected {
+            key: "unknown".to_string(),
+            expected: "12-byte nonce".to_string(),
+            computed: format!("{}-byte nonce", nonce_bytes.len()),
+        });
+    }
+
+    let ct_bytes = hex::decode(ct_hex).map_err(|_| VaultError::TamperDetected {
+        key: "unknown".to_string(),
+        expected: "valid hex ciphertext".to_string(),
+        computed: "invalid hex ciphertext".to_string(),
+    })?;
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(master_key));
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let plaintext_bytes = cipher
+        .decrypt(nonce, ct_bytes.as_ref())
+        .map_err(|_| VaultError::TamperDetected {
+            key: "unknown".to_string(),
+            expected: "valid AES-256-GCM authentication tag".to_string(),
+            computed: "corrupted ciphertext or authentication tag mismatch".to_string(),
+        })?;
+
+    String::from_utf8(plaintext_bytes).map_err(|e| VaultError::SerializationError(e.to_string()))
 }
 
 /// Generic Vault Key-Value Record with cryptographic provenance
@@ -469,7 +548,7 @@ impl FamilyVault {
     // Generic Key-Value Vault Operations
     // ==========================================
 
-    /// Store a key-value pair with automatic SHA-256 calculation and timestamp
+    /// Store a key-value pair with AES-256-GCM encryption at rest and keyed HMAC-SHA256
     pub fn store_kv(
         &self,
         key: &str,
@@ -477,8 +556,10 @@ impl FamilyVault {
         record_type: Option<&str>,
     ) -> Result<VaultRecord, VaultError> {
         let rtype = record_type.unwrap_or("document").to_string();
-        let payload = format!("{}:{}:{}", key.trim(), value.trim(), rtype.trim());
-        let checksum = compute_sha256(payload.as_bytes());
+        let master_key = get_vault_master_key();
+        let encrypted_val = encrypt_vault_value(value, &master_key)?;
+        let payload = format!("{}:{}:{}", key.trim(), encrypted_val.trim(), rtype.trim());
+        let checksum = compute_hmac_sha256(&master_key, payload.as_bytes());
         let now = Utc::now().to_rfc3339();
 
         self.conn.execute(
@@ -491,7 +572,7 @@ impl FamilyVault {
                 sha256_checksum = excluded.sha256_checksum,
                 updated_at = excluded.updated_at
             "#,
-            params![key, value, rtype, checksum, now],
+            params![key, encrypted_val, rtype, checksum, now],
         )?;
 
         self.record_audit_log("STORE", &rtype, key, &checksum, true)?;
@@ -506,7 +587,7 @@ impl FamilyVault {
         })
     }
 
-    /// Retrieve key-value pair and verify SHA-256 tamper-evident integrity
+    /// Retrieve key-value pair, verify keyed HMAC-SHA256 integrity, and decrypt transparently
     pub fn get_kv(&self, key: &str) -> Result<VaultRecord, VaultError> {
         let mut stmt = self.conn.prepare(
             r#"
@@ -516,44 +597,61 @@ impl FamilyVault {
             "#,
         )?;
 
-        let record = stmt
+        let (r_key, db_value, r_type, stored_hmac, created_at, updated_at) = stmt
             .query_row(params![key], |row| {
-                Ok(VaultRecord {
-                    key: row.get(0)?,
-                    value: row.get(1)?,
-                    record_type: row.get(2)?,
-                    sha256_checksum: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                })
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
             })
             .optional()?
             .ok_or_else(|| VaultError::NotFound(key.to_string()))?;
 
-        // Recompute SHA-256 checksum to verify tamper-evident integrity
-        let payload = format!(
-            "{}:{}:{}",
-            record.key.trim(),
-            record.value.trim(),
-            record.record_type.trim()
-        );
-        let computed = compute_sha256(payload.as_bytes());
+        let master_key = get_vault_master_key();
 
-        if computed != record.sha256_checksum {
-            self.record_audit_log("TAMPER_DETECTED", &record.record_type, key, &computed, false)?;
+        // 1. Recompute keyed HMAC-SHA256 tag over (key + ciphertext + record_type)
+        let payload = format!("{}:{}:{}", r_key.trim(), db_value.trim(), r_type.trim());
+        let computed = compute_hmac_sha256(&master_key, payload.as_bytes());
+
+        if computed != stored_hmac {
+            self.record_audit_log("TAMPER_DETECTED", &r_type, key, &computed, false)?;
             return Err(VaultError::TamperDetected {
                 key: key.to_string(),
-                expected: record.sha256_checksum,
+                expected: stored_hmac,
                 computed,
             });
         }
 
-        self.record_audit_log("GET", &record.record_type, key, &record.sha256_checksum, true)?;
+        // 2. Decrypt AES-256-GCM ciphertext
+        let decrypted_val = decrypt_vault_value(&db_value, &master_key).map_err(|err| {
+            let _ = self.record_audit_log("TAMPER_DETECTED", &r_type, key, "DECRYPT_FAILED", false);
+            match err {
+                VaultError::TamperDetected { expected, computed, .. } => VaultError::TamperDetected {
+                    key: key.to_string(),
+                    expected,
+                    computed,
+                },
+                other => other,
+            }
+        })?;
 
-        Ok(record)
+        self.record_audit_log("GET", &r_type, key, &stored_hmac, true)?;
+
+        Ok(VaultRecord {
+            key: r_key,
+            value: decrypted_val,
+            record_type: r_type,
+            sha256_checksum: stored_hmac,
+            created_at,
+            updated_at,
+        })
     }
 
-    /// List all key-value records
+    /// List all key-value records with transparent AES-256-GCM decryption
     pub fn list_kv(&self) -> Result<Vec<VaultRecord>, VaultError> {
         let mut stmt = self.conn.prepare(
             r#"
@@ -563,22 +661,49 @@ impl FamilyVault {
             "#,
         )?;
 
+        let master_key = get_vault_master_key();
         let rows = stmt.query_map([], |row| {
-            Ok(VaultRecord {
-                key: row.get(0)?,
-                value: row.get(1)?,
-                record_type: row.get(2)?,
-                sha256_checksum: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
-            })
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
         })?;
 
         let mut list = Vec::new();
         for r in rows {
-            list.push(r?);
+            let (k, db_val, rtype, hmac_str, cr, up) = r?;
+            let decrypted_val = decrypt_vault_value(&db_val, &master_key).unwrap_or_else(|_| db_val);
+            list.push(VaultRecord {
+                key: k,
+                value: decrypted_val,
+                record_type: rtype,
+                sha256_checksum: hmac_str,
+                created_at: cr,
+                updated_at: up,
+            });
         }
         Ok(list)
+    }
+
+    /// Alias for list_kv() to list records transparently
+    pub fn list_records(&self) -> Result<Vec<VaultRecord>, VaultError> {
+        self.list_kv()
+    }
+
+    /// Inspect raw SQLite stored value without decryption (for cryptographic audit verification)
+    pub fn get_raw_kv_value(&self, key: &str) -> Result<String, VaultError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT value FROM vault_records WHERE key = ?1",
+        )?;
+        let val: String = stmt
+            .query_row(params![key], |r| r.get(0))
+            .optional()?
+            .ok_or_else(|| VaultError::NotFound(key.to_string()))?;
+        Ok(val)
     }
 
     /// Verify integrity of a specific key
@@ -603,9 +728,11 @@ impl FamilyVault {
             .optional()?
             .ok_or_else(|| VaultError::NotFound(key.to_string()))?;
 
+        let master_key = get_vault_master_key();
         let payload = format!("{}:{}:{}", row.0.trim(), row.1.trim(), row.2.trim());
-        let computed = compute_sha256(payload.as_bytes());
-        let is_valid = computed == row.3;
+        let computed = compute_hmac_sha256(&master_key, payload.as_bytes());
+        let decrypt_ok = decrypt_vault_value(&row.1, &master_key).is_ok();
+        let is_valid = computed == row.3 && decrypt_ok;
 
         let res = VerificationResult {
             key_or_id: key.to_string(),
@@ -630,18 +757,36 @@ impl FamilyVault {
 
     /// Verify integrity of all stored key-value records
     pub fn verify_all_kv(&self) -> Result<Vec<VerificationResult>, VaultError> {
-        let records = self.list_kv()?;
-        let mut results = Vec::new();
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT key, value, record_type, sha256_checksum
+            FROM vault_records
+            ORDER BY key ASC
+            "#,
+        )?;
 
-        for r in records {
-            let payload = format!("{}:{}:{}", r.key.trim(), r.value.trim(), r.record_type.trim());
-            let computed = compute_sha256(payload.as_bytes());
-            let is_valid = computed == r.sha256_checksum;
+        let master_key = get_vault_master_key();
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            let (k, db_val, rtype, stored_hmac) = r?;
+            let payload = format!("{}:{}:{}", k.trim(), db_val.trim(), rtype.trim());
+            let computed = compute_hmac_sha256(&master_key, payload.as_bytes());
+            let decrypt_ok = decrypt_vault_value(&db_val, &master_key).is_ok();
+            let is_valid = computed == stored_hmac && decrypt_ok;
 
             results.push(VerificationResult {
-                key_or_id: r.key,
-                record_type: r.record_type,
-                stored_checksum: r.sha256_checksum,
+                key_or_id: k,
+                record_type: rtype,
+                stored_checksum: stored_hmac,
                 computed_checksum: computed,
                 is_valid,
                 tampered: !is_valid,
